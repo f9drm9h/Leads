@@ -1,0 +1,22 @@
+# Where to scan for businesses.
+# Each area is a circle: a center point plus a radius in meters (API max: 50000).
+#
+# Tips:
+#   - Nearby Search returns AT MOST 20 places per request, with no paging.
+#     Several smaller circles find more businesses than one giant circle.
+#   - To get coordinates: right-click any spot in Google Maps and click the
+#     numbers that appear (they are copied as "latitude, longitude").
+#
+# The sample areas below point at Santo Domingo, Dominican Republic.
+# Replace them with your own neighborhoods.
+
+areas:
+  - label: default
+    latitude: 18.4861
+    longitude: -69.9312
+    radius_meters: 3000
+
+  - label: east-side
+    latitude: 18.5089
+    longitude: -69.8404
+    radius_meters: 4000

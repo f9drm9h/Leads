@@ -1,0 +1,66 @@
+# Business categories to scan for.
+#
+# Fields per category:
+#   label             - short name you use on the command line (--category salons)
+#   included_types    - official Google Places API (New) place types ("Table A").
+#                       Full list:
+#                       https://developers.google.com/maps/documentation/places/web-service/place-types
+#                       An invalid type makes the API reject the whole request.
+#   appointment_based - true if customers book time slots (salons, mechanics...)
+#   quote_based       - true if customers ask for a price quote (repairs, events...)
+#   menu_based        - true if the business sells from a menu/catalog (food...)
+#   recommended_offer - fallback service suggestion when no specific rule matches
+#
+# The three true/false flags feed both the lead score (+15 if any is true)
+# and the recommended-offer logic in scripts/score_leads.py.
+
+categories:
+  - label: salons
+    included_types:
+      - beauty_salon
+      - hair_salon
+      - barber_shop
+      - nail_salon
+    appointment_based: true
+    quote_based: false
+    menu_based: false
+    recommended_offer: "Appointment booking page with WhatsApp button"
+
+  - label: phone_repair
+    included_types:
+      - cell_phone_store
+      - electronics_store
+    appointment_based: false
+    quote_based: true
+    menu_based: false
+    recommended_offer: "Repair quote form with WhatsApp button"
+
+  - label: auto_services
+    included_types:
+      - car_repair
+      - car_wash
+      - auto_parts_store
+    appointment_based: true
+    quote_based: true
+    menu_based: false
+    recommended_offer: "Service quote form and booking page"
+
+  - label: restaurants
+    included_types:
+      - restaurant
+      - cafe
+      - bakery
+    appointment_based: false
+    quote_based: false
+    menu_based: true
+    recommended_offer: "One-page site with menu and WhatsApp orders"
+
+  - label: event_services
+    included_types:
+      - event_venue
+      - banquet_hall
+      - wedding_venue
+    appointment_based: false
+    quote_based: true
+    menu_based: false
+    recommended_offer: "Quote request form with photo gallery"

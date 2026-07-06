@@ -1,0 +1,12 @@
+# Secrets — never commit the real API key
+.env
+
+# Python
+__pycache__/
+*.pyc
+
+# Short-term research data (regenerate with the scripts, don't version it)
+data/
+reports/*.csv
+reports/*.json
+reports/*.html
