@@ -24,6 +24,7 @@ REPORTS_DIR = PROJECT_ROOT / "reports"
 
 SCAN_AREAS_FILE = CONFIG_DIR / "scan_areas.yml"
 CATEGORIES_FILE = CONFIG_DIR / "categories.yml"
+MANUAL_CHECKS_FILE = CONFIG_DIR / "manual_checks.yml"
 
 # Working files produced by the pipeline. This is short-term research data,
 # not a permanent database — refresh it before every outreach round.
@@ -172,6 +173,54 @@ def load_categories():
     return categories
 
 
+# Values you may record in config/manual_checks.yml after checking a business
+# online by hand. These are the ONLY sources of "verified" presence knowledge —
+# the tool never scrapes or probes anything itself.
+ONLINE_PRESENCE_MANUAL_VALUES = (
+    "weak_or_missing",
+    "has_social_presence",
+    "has_booking_presence",
+    "has_directory_presence",
+    "has_website",
+)
+
+
+def load_manual_checks():
+    """Read config/manual_checks.yml -> {place_id: {online_presence, note}}.
+
+    The file is optional; an empty or missing file simply means nothing has
+    been manually verified yet.
+    """
+    if not MANUAL_CHECKS_FILE.exists():
+        return {}
+    data = load_yaml(MANUAL_CHECKS_FILE)
+    checks = data.get("checks") or []
+    if not isinstance(checks, list):
+        raise ConfigError("manual_checks.yml: 'checks' must be a list.")
+
+    result = {}
+    for index, entry in enumerate(checks):
+        where = f"manual_checks.yml, check #{index + 1}"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{where}: each check must be a mapping (place_id, online_presence).")
+        place_id = entry.get("place_id")
+        if not isinstance(place_id, str) or not place_id.strip():
+            raise ConfigError(f"{where}: 'place_id' must be a non-empty text value.")
+        presence = entry.get("online_presence")
+        if presence not in ONLINE_PRESENCE_MANUAL_VALUES:
+            raise ConfigError(
+                f"{where}: 'online_presence' must be one of: "
+                + ", ".join(ONLINE_PRESENCE_MANUAL_VALUES)
+            )
+        note = entry.get("note", "")
+        if note is None:
+            note = ""
+        if not isinstance(note, str):
+            raise ConfigError(f"{where}: 'note' must be text.")
+        result[place_id.strip()] = {"online_presence": presence, "note": note.strip()}
+    return result
+
+
 def load_json(path, default=_MISSING):
     """Read a JSON file. If it does not exist, return the default (if given)."""
     if not path.exists():
@@ -307,6 +356,30 @@ def is_generic_brand_key(brand_key):
     if not tokens:
         return True
     return all(token in GENERIC_BRAND_TOKENS or token.isdigit() for token in tokens)
+
+
+# Extra descriptor words stripped (on top of GENERIC_BRAND_TOKENS) when
+# building the CORE brand key used to spot likely same-brand rows:
+# "MONTIBELLO Hair Lounge and MedSpa" and "Montibello" both reduce to
+# "montibello". Core keys only FLAG possible matches — they never auto-merge.
+CORE_DESCRIPTOR_TOKENS = GENERIC_BRAND_TOKENS | {
+    "lounge", "medspa", "med", "by", "service", "services", "and",
+}
+
+
+def make_core_brand_key(name):
+    """Brand key with generic descriptor words removed.
+
+    Used only to flag possible_brand_match candidates for manual review;
+    actual clustering still requires the full brand keys to be identical,
+    so unrelated businesses are never merged automatically.
+    """
+    tokens = [
+        token
+        for token in make_brand_key(name).split()
+        if token not in CORE_DESCRIPTOR_TOKENS and not token.isdigit()
+    ]
+    return " ".join(tokens)
 
 
 def name_keyword_hit(name, keywords):

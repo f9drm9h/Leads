@@ -15,6 +15,7 @@ import argparse
 import csv
 import html
 from string import Template
+from urllib.parse import quote_plus
 
 from common import (
     REPORTS_DIR,
@@ -29,15 +30,21 @@ from common import (
 CSV_COLUMNS = [
     "lead_score",
     "lead_type",
+    "manual_verification_priority",
     "name",
     "matched_category",
     "category_confidence",
+    "online_presence_status",
+    "manually_verified",
+    "website_status",
     "brand_key",
+    "core_brand_key",
     "cluster_id",
     "cluster_size",
     "is_possible_chain",
     "other_locations_count",
-    "website_status",
+    "possible_brand_match",
+    "bad_category_match",
     "has_website",
     "missing_profile_website",
     "brand_has_website_elsewhere",
@@ -60,15 +67,34 @@ CSV_COLUMNS = [
     "source_categories",
     "source_areas",
     "scanned_at",
+    "id",
 ]
 
-LIST_COLUMNS = {"same_brand_locations", "types", "source_categories", "source_areas"}
+LIST_COLUMNS = {
+    "same_brand_locations",
+    "possible_brand_match",
+    "types",
+    "source_categories",
+    "source_areas",
+}
 
+# Labels describe the GOOGLE PROFILE only — a missing websiteUri never means
+# the business has no online presence (Instagram, Fresha, Facebook, ...).
 WEBSITE_STATUS_LABELS = {
+    "has_website": "Website on Google profile",
+    "brand_has_website_elsewhere": "Brand site on another branch",
+    "all_locations_missing_website": "No website on Google profile",
+    "needs_manual_review": "Needs manual online-presence check",
+}
+
+ONLINE_PRESENCE_LABELS = {
+    "unknown_not_checked": "Unknown — not checked",
+    "weak_or_missing": "Weak/missing (verified)",
+    "has_social_presence": "Social presence (verified)",
+    "has_booking_presence": "Booking presence (verified)",
+    "has_directory_presence": "Directory presence (verified)",
     "has_website": "Has website",
-    "brand_has_website_elsewhere": "Brand site elsewhere",
-    "all_locations_missing_website": "No site (brand-wide)",
-    "needs_manual_review": "Verify manually",
+    "needs_manual_review": "Needs manual check",
 }
 
 HTML_PAGE = Template("""\
@@ -110,6 +136,17 @@ HTML_PAGE = Template("""\
   .conf-medium { background: #fff2cc; color: #7a5b00; }
   .conf-low { background: #ffe5e0; color: #a12318; }
   .leadtype { font-size: 11px; font-weight: 600; color: #354150; white-space: nowrap; }
+  .op-unknown { background: #e8ebef; color: #57606a; }
+  .op-weak { background: #ffe5e0; color: #a12318; }
+  .op-has { background: #dcf2e2; color: #14602a; }
+  .op-review { background: #ece3fa; color: #5a2ca0; }
+  .prio-high { background: #a12318; color: #fff; }
+  .prio-medium { background: #b58a00; color: #fff; }
+  .prio-low { background: #8c959f; color: #fff; }
+  .qlinks { white-space: nowrap; font-size: 12px; }
+  .qlinks a { margin-right: 6px; }
+  .matches { font-size: 12px; color: #7a5b00; max-width: 220px; }
+  .closed { color: #a12318; font-size: 12px; font-weight: 600; }
   .cluster { font-size: 12px; }
   .chainbadge { color: #7a5b00; font-weight: 600; }
   .missing { color: #c0392b; font-weight: 600; }
@@ -125,22 +162,30 @@ HTML_PAGE = Template("""\
 $cluster_count brand clusters &nbsp;&middot;&nbsp; $chain_count possible multi-location brands &nbsp;&middot;&nbsp;
 short-term research snapshot from the official Google Places API &mdash; re-scan before outreach.</p>
 <p class="legend">
-<b>Website status</b> is per Google profile, not per company:
-<span class="badge ws-missing">No site (brand-wide)</span> no scanned location of this brand has a website &mdash; the best "needs a website" leads &nbsp;&middot;&nbsp;
-<span class="badge ws-elsewhere">Brand site elsewhere</span> this profile has no website but another branch of the same brand does (fix the profile, don't sell a new site) &nbsp;&middot;&nbsp;
-<span class="badge ws-review">Verify manually</span> the brand grouping is uncertain (generic name or known chain) &mdash; check by hand &nbsp;&middot;&nbsp;
-<span class="badge ws-has">Has website</span> this profile links a website.<br>
+<b>This is a prioritization aid, not proof.</b> "No website on Google profile" only means
+the Places API returned no <code>websiteUri</code> for that profile &mdash; the business may still
+have Instagram, Facebook, Fresha/Booksy, a directory page or an unlinked website.
+Use the <b>quick search links</b> to verify by hand, record what you find in
+<code>config/manual_checks.yml</code>, then re-run the score + export steps.
+Only manually verified leads are ever labeled definitively.<br>
+<b>Google profile website:</b>
+<span class="badge ws-missing">No website on Google profile</span> not returned by the Places API for any scanned location of this brand &nbsp;&middot;&nbsp;
+<span class="badge ws-elsewhere">Brand site on another branch</span> fix this profile's link, don't sell a new site &nbsp;&middot;&nbsp;
+<span class="badge ws-review">Needs manual online-presence check</span> uncertain brand grouping, known chain, or a likely name match &nbsp;&middot;&nbsp;
+<span class="badge ws-has">Website on Google profile</span>.<br>
 Rows with a yellow tint belong to a possible multi-location brand &mdash; branches are grouped
-under their best-scoring location but every branch is still listed.
-Always verify chains and "Review?" rows manually before contacting anyone.
+under their best-scoring location but every branch is still listed. Verify every
+"Priority: high" row before outreach.
 </p>
 <div class="tablewrap">
 <table>
   <thead>
     <tr>
       <th>Score</th><th>Business</th><th>Category</th><th>Conf.</th>
-      <th>Brand cluster</th><th>Website status</th><th>Lead type</th>
-      <th>Phone</th><th>Rating</th><th>Status</th><th>Maps</th>
+      <th>Brand cluster</th><th>Possible brand matches</th>
+      <th>Google profile website</th><th>Online presence</th><th>Lead type</th>
+      <th>Verify priority</th><th>Quick search</th>
+      <th>Phone</th><th>Rating</th><th>Maps</th>
       <th>Recommended offer</th><th>Review?</th>
     </tr>
   </thead>
@@ -183,6 +228,62 @@ def website_cell(lead):
     return "<br>".join(parts)
 
 
+def presence_cell(lead):
+    """Badge for online_presence_status (per manual verification, if any)."""
+    status = lead.get("online_presence_status", "unknown_not_checked")
+    label = ONLINE_PRESENCE_LABELS.get(status, status)
+    css = {
+        "unknown_not_checked": "op-unknown",
+        "weak_or_missing": "op-weak",
+        "has_social_presence": "op-has",
+        "has_booking_presence": "op-has",
+        "has_directory_presence": "op-has",
+        "has_website": "op-has",
+        "needs_manual_review": "op-review",
+    }.get(status, "op-unknown")
+    return f'<span class="badge {css}">{html.escape(label)}</span>'
+
+
+def priority_cell(lead):
+    """Badge for manual_verification_priority."""
+    priority = lead.get("manual_verification_priority", "medium")
+    return f'<span class="badge prio-{html.escape(priority)}">{html.escape(priority)}</span>'
+
+
+def matches_cell(lead):
+    """Possible same-brand rows (flagged by core-name match, never merged)."""
+    matches = lead.get("possible_brand_match") or []
+    if not matches:
+        return '<span class="muted">&mdash;</span>'
+    listed = "<br>".join(html.escape(name) for name in matches)
+    return f'<span class="matches">{listed}</span>'
+
+
+def city_from_address(address):
+    """Best-effort city for search queries: the part before the country."""
+    parts = [part.strip() for part in str(address or "").split(",") if part.strip()]
+    return parts[-2] if len(parts) >= 2 else ""
+
+
+def quick_links_cell(lead):
+    """Manual-verification search links (no scraping — just search URLs)."""
+    name = lead.get("name", "")
+    if not name:
+        return '<span class="muted">&mdash;</span>'
+    city = city_from_address(lead.get("address", ""))
+    google_q = quote_plus(f'"{name}" {city}'.strip())
+    instagram_q = quote_plus(f'"{name}" site:instagram.com')
+    facebook_q = quote_plus(f'"{name}" site:facebook.com')
+    esc = html.escape
+    return (
+        '<span class="qlinks">'
+        f'<a href="https://www.google.com/search?q={esc(google_q, quote=True)}" target="_blank">Google</a>'
+        f'<a href="https://www.google.com/search?q={esc(instagram_q, quote=True)}" target="_blank">IG</a>'
+        f'<a href="https://www.google.com/search?q={esc(facebook_q, quote=True)}" target="_blank">FB</a>'
+        "</span>"
+    )
+
+
 def cluster_cell(lead):
     """Brand cluster column: only noisy when there is something to say."""
     esc = html.escape
@@ -214,7 +315,6 @@ def build_html_row(lead):
     phone = esc(lead.get("phone", ""))
     phone_cell = phone if phone else '<span class="missing">none</span>'
 
-    status = str(lead.get("business_status") or "").replace("_", " ").title()
     score = lead.get("lead_score", 0)
     confidence = lead.get("category_confidence", "medium")
     lead_type = str(lead.get("lead_type", "")).replace("_", " ")
@@ -224,6 +324,13 @@ def build_html_row(lead):
         else '<span class="muted">&mdash;</span>'
     )
 
+    business_status = lead.get("business_status", "")
+    closed_html = ""
+    if business_status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
+        closed_html = (
+            f'<div class="closed">{esc(business_status.replace("_", " ").title())}</div>'
+        )
+
     notes = lead.get("notes", "")
     notes_html = f'<div class="notes">{esc(notes)}</div>' if notes else ""
     row_class = ' class="chain"' if (lead.get("cluster_size", 1) > 1) else ""
@@ -231,16 +338,19 @@ def build_html_row(lead):
     return (
         f"    <tr{row_class}>\n"
         f'      <td><span class="score {score_css_class(score)}">{score}</span></td>\n'
-        f'      <td>{esc(lead.get("name", ""))}'
+        f'      <td>{esc(lead.get("name", ""))}{closed_html}'
         f'<div class="addr">{esc(lead.get("address", ""))}</div>{notes_html}</td>\n'
         f'      <td>{esc(lead.get("matched_category") or lead.get("source_category", ""))}</td>\n'
         f'      <td><span class="badge conf-{esc(confidence)}">{esc(confidence)}</span></td>\n'
         f"      <td>{cluster_cell(lead)}</td>\n"
+        f"      <td>{matches_cell(lead)}</td>\n"
         f"      <td>{website_cell(lead)}</td>\n"
+        f"      <td>{presence_cell(lead)}</td>\n"
         f'      <td><span class="leadtype">{esc(lead_type)}</span></td>\n'
+        f"      <td>{priority_cell(lead)}</td>\n"
+        f"      <td>{quick_links_cell(lead)}</td>\n"
         f"      <td>{phone_cell}</td>\n"
         f"      <td>{rating_cell}</td>\n"
-        f'      <td>{esc(status) or "?"}</td>\n'
         f"      <td>{maps_cell}</td>\n"
         f'      <td>{esc(lead.get("recommended_offer", ""))}</td>\n'
         f"      <td>{review_cell}</td>\n"
@@ -344,10 +454,12 @@ def main():
         {
             "generated_at": generated_at,
             "note": (
-                "Short-term lead research snapshot from the official Google Places "
-                "API. 'Missing website' means missing from that Google Places "
-                "profile, not necessarily from the whole company. Verify "
-                "multi-location brands manually and refresh (re-scan) before outreach."
+                "Short-term lead PRIORITIZATION snapshot from the official Google "
+                "Places API — not proof of anything. A missing websiteUri only "
+                "means the Google profile returned no website; the business may "
+                "still have Instagram/booking/directory presence or an unlinked "
+                "site. Manually verify top leads (see manual_verification_priority "
+                "and config/manual_checks.yml) and re-scan before outreach."
             ),
             "lead_count": len(leads),
             "leads": leads,

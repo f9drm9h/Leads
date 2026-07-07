@@ -19,13 +19,18 @@ outreach → re-scan next time for fresh data.
 ## How it works
 
 ```
-config/scan_areas.yml     config/categories.yml
-        \                   /
+config/scan_areas.yml   config/categories.yml   config/manual_checks.yml
+        \                   |                     (your hand-verified results)
    scripts/scan_places.py     ->  data/scan_results.json   (raw, deduplicated by place id)
    scripts/score_leads.py     ->  data/leads_scored.json   (+ brand clusters + website
-                                                            status + confidence + score)
+                                                            status + online presence +
+                                                            confidence + score)
    scripts/export_report.py   ->  reports/leads.csv / leads.json / leads.html
 ```
+
+**This is a lead prioritization tool, not proof that a business lacks online
+presence.** It tells you who is worth checking first — you must manually
+verify top leads (the report gives you quick search links) before outreach.
 
 The report files in `reports/` are created when you run the export step —
 they don't exist until then.
@@ -162,77 +167,123 @@ Clusters are treated as *uncertain* when the shared name is generic
 brand is a known chain/franchise — those leads are flagged for manual review
 instead of being trusted.
 
-## Website status
+## Website status vs. online presence — the crucial difference
 
-**"Missing website" always means missing from that specific Google Places
-profile — NOT necessarily missing from the whole company.** The status looks
-across the brand cluster to tell those cases apart:
+**A missing `websiteUri` only means the website field was not returned by
+the Places API for that Google profile.** Many businesses run entirely on
+Instagram, Facebook, Fresha/Booksy, directories, or have a website that
+simply isn't linked on Google. So the tool tracks two separate things:
+
+`website_status` — what the **Google profiles** say (report label in quotes):
 
 | `website_status` | Meaning |
 |---|---|
-| `has_website` | This profile links a website. |
-| `brand_has_website_elsewhere` | This profile has no website, but another scanned location of the same brand does. Don't pitch a new site — fix the profile link. |
-| `all_locations_missing_website` | No scanned location of this brand has a website. The strongest "needs a website" signal this tool can give. |
-| `needs_manual_review` | No website on the profile and the brand cluster is uncertain (generic name or known chain) — verify by hand. |
+| `has_website` | "Website on Google profile" — the profile links a site. |
+| `brand_has_website_elsewhere` | "Brand site on another branch" — this profile has no site but another scanned location of the same brand does. Fix the profile link, don't pitch a new site. |
+| `all_locations_missing_website` | "No website on Google profile" — the API returned no website for any scanned location of this brand. A lead worth **checking**, not a confirmed gap. |
+| `needs_manual_review` | "Needs manual online-presence check" — uncertain brand grouping (generic name, known chain, or a likely name match). |
 
-Remember the tool only knows the locations **it scanned**: a brand can have
-a website (or more branches) outside your scan areas. `all_locations_missing_website`
-is evidence, not proof.
+`online_presence_status` — what is actually known about the business online:
+`unknown_not_checked` (default — the tool never probes social networks),
+`weak_or_missing`, `has_social_presence`, `has_booking_presence`,
+`has_directory_presence`, `has_website` (the verified values only come from
+**your** entries in `config/manual_checks.yml`), and `needs_manual_review`.
+
+## The manual verification workflow
+
+1. Export the report and sort by score / "Verify priority" (`high` first).
+2. Use each row's **quick search links** (Google, Instagram, Facebook site
+   searches — generated links only, nothing is scraped) to check the
+   business by hand.
+3. Record what you found in `config/manual_checks.yml` (the file explains
+   the format; the `id` for each lead is in `reports/leads.csv`).
+4. Re-run `py scripts/score_leads.py` and `py scripts/export_report.py`.
+
+Only after step 3 can a lead become a `NEW_WEBSITE_LEAD` (+25 score).
+Verified social/booking/directory presence scores the lead down (−15) so
+your list keeps getting cleaner as you work through it.
 
 ## Lead types
 
-Each lead is classified so you can filter the list by the kind of work:
-`NEW_WEBSITE_LEAD`, `GBP_CLEANUP_LEAD` (profile missing its brand's website
-link), `BRANCH_PAGE_LEAD` (busy branch of a brand with a site elsewhere),
-`MENU_PAGE_LEAD`, `QUOTE_FORM_LEAD`, `APPOINTMENT_PAGE_LEAD`,
-`CHATBOT_CANDIDATE` (question-heavy category with 50+ reviews),
-`NEEDS_MANUAL_REVIEW`, and `LOW_PRIORITY` (closed, or nothing to offer).
+`POTENTIAL_WEBSITE_LEAD` (profile lacks a site, **presence not verified
+yet** — the default for missing websites), `NEW_WEBSITE_LEAD` (only after
+you manually verified weak/missing presence), `GBP_CLEANUP_LEAD` (profile
+missing its brand's website link), `BRANCH_PAGE_LEAD` (busy branch of a
+brand with a site elsewhere), `MENU_PAGE_LEAD`, `QUOTE_FORM_LEAD`,
+`APPOINTMENT_PAGE_LEAD`, `CHATBOT_CANDIDATE` (question-heavy category with
+50+ reviews), `MULTI_LOCATION_BRAND_REVIEW` (known chain or likely
+same-brand name match — confirm before pitching),
+`BAD_CATEGORY_MATCH` (name says plaza/mall/edificio/torre and the types
+don't prove a real business in the niche), `NEEDS_MANUAL_REVIEW`, and
+`LOW_PRIORITY` (closed, or nothing to offer).
+
+Businesses with similar-but-not-identical names (e.g. "Montibello" and
+"MONTIBELLO Hair Lounge and MedSpa") are **never auto-merged**; each lists
+the other under `possible_brand_match` and both are flagged
+`MULTI_LOCATION_BRAND_REVIEW` so you can decide.
 
 ## How scoring works
 
+There is deliberately **no big bonus for a missing `websiteUri`** — only a
+manual verification can prove weak online presence:
+
 | Points | Rule |
 |-------:|------|
-| +35 | every known location of this brand is missing a website |
-| +20 | this specific profile is missing a website |
+| +15 | Google profile returned no `websiteUri` |
+| +25 | **manually verified** as weak/missing online presence |
 | +15 | phone number exists |
 | +15 | rating ≥ 4.0 |
 | +15 | review count ≥ 25 |
 | +10 | category confidence is high |
 | +10 | category is appointment-, quote-, or menu-based |
 | +5  | business status is OPERATIONAL |
-| −30 | the brand has a website on another location |
+| −15 | verified Instagram/booking/directory presence (from manual checks) |
+| −30 | the brand has a website on another scanned location |
 | −25 | category confidence is low |
-| −25 | likely chain / franchise / corporate branch (3+ locations or known brand) |
+| −25 | bad category match (name says building/plaza, types don't disprove) |
+| −25 | likely chain / franchise (3+ locations or known brand) |
+| −20 | possible multi-location brand (2 locations or a likely name match) |
 | −50 | CLOSED_PERMANENTLY |
 | −25 | CLOSED_TEMPORARILY |
 
-All values are constants at the top of `scripts/score_leads.py` — tweak them
-freely.
+The −25 chain and −20 possible-multi penalties don't stack. All values are
+constants at the top of `scripts/score_leads.py` — tweak them freely.
+
+Every lead also gets a `manual_verification_priority` (high / medium / low):
+**high** = promising unverified lead, check these first; **medium** = worth
+checking but murkier; **low** = verified already, has a site, or not worth
+the time.
 
 ## How the recommended offer is chosen
 
-Up to two suggestions per lead, driven by website status first:
+Up to two suggestions per lead. Wording stays non-definitive until you have
+manually verified the lead:
 
-1. `all_locations_missing_website` → *One-page website + WhatsApp button*
-2. `brand_has_website_elsewhere` → *Google Business Profile cleanup: add the
-   correct website link to this branch* (busy branches also get a
-   *branch page on the existing brand website*)
-3. `needs_manual_review` → *verify brand and branches manually before pitching*
-4. Category flags: menu-based → *menu/catalog page or WhatsApp order flow*;
+1. `POTENTIAL_WEBSITE_LEAD` → *check online presence first (quick links in
+   report); if weak: one-page website + WhatsApp button*
+2. `NEW_WEBSITE_LEAD` (verified) → *one-page website + WhatsApp button*
+3. `GBP_CLEANUP_LEAD` / `BRANCH_PAGE_LEAD` → *Google Business Profile
+   cleanup: add the correct website link to this branch* (busy branches also
+   get a *branch page on the existing brand website*)
+4. `MULTI_LOCATION_BRAND_REVIEW` / `NEEDS_MANUAL_REVIEW` /
+   `BAD_CATEGORY_MATCH` → verify manually before pitching anything
+5. Category flags: menu-based → *menu/catalog page or WhatsApp order flow*;
    quote-based (service/auto/events) → *quote request form*; otherwise
    appointment-based → *appointment request page*
-5. FAQ chatbot is only suggested for `question_heavy` categories with
+6. FAQ chatbot is only suggested for `question_heavy` categories with
    50+ reviews (enough complexity to be worth automating)
-6. Nothing matched → the category's `recommended_offer` from the config
+7. Nothing matched → the category's `recommended_offer` from the config
 
 ## Before you contact anyone — please read
 
 - This tool is a **prioritization aid, not a final truth source**. It ranks
   who is *probably* worth a look; it does not verify anything for you.
-- "Missing website" means missing **from that Google Places profile**. Small
-  businesses often have a site (or an Instagram that works as one) that
-  simply isn't linked on Google. Check before pitching a new website —
-  if the site exists, the real offer is a profile cleanup.
+- "No website on Google profile" means the website was **not returned by the
+  Places API for that profile**. Small businesses often run on Instagram,
+  Facebook, Fresha or a site that simply isn't linked on Google. Use the
+  report's quick search links to check, record the result in
+  `config/manual_checks.yml`, and re-run the score/export steps — if a site
+  exists, the real offer is a profile cleanup, not a new website.
 - **Multi-location businesses (any `cluster_size` > 1, any "Review?" flag)
   require manual verification before outreach.** Same-name places can be
   unrelated; branches can be run by different owners; chains have head
@@ -311,7 +362,8 @@ local-business-leads/
 ├── requirements.txt
 ├── config/
 │   ├── scan_areas.yml    # where to scan
-│   └── categories.yml    # what kinds of businesses to look for
+│   ├── categories.yml    # what kinds of businesses to look for
+│   └── manual_checks.yml # your hand-verified online-presence results
 ├── scripts/
 │   ├── common.py         # shared helpers (paths, config loading, JSON)
 │   ├── scan_places.py    # step 1: call the Places API

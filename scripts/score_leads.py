@@ -1,18 +1,24 @@
 """Score scanned businesses: cluster brands, judge data quality, pick offers.
 
-Reads  data/scan_results.json   (produced by scan_places.py)
-Writes data/leads_scored.json   (leads + brand cluster + website status +
-                                 category confidence + lead type + score)
+Reads  data/scan_results.json    (produced by scan_places.py)
+Reads  config/manual_checks.yml  (your manual online-presence verifications)
+Writes data/leads_scored.json    (leads + brand cluster + website status +
+                                  online presence + lead type + score)
 
 What happens to each lead:
   1. Duplicate place ids are collapsed into one row (source lists merged).
-  2. A conservative brand_key groups branches of the same brand together.
-  3. Website status looks across the whole brand cluster, so a branch of a
-     brand that has a website elsewhere is NOT counted as a "no website" lead.
-  4. Category confidence checks the Google place types (and name keywords)
-     against the category that found the lead, to weed out noise like an
-     auto shop showing up in a phone-repair scan.
-  5. A lead type + recommended offer + score are assigned from all of that.
+  2. A conservative brand_key groups branches of the same brand together;
+     a looser "core" key flags LIKELY same-brand rows (possible_brand_match)
+     without ever auto-merging them.
+  3. Website status looks across the whole brand cluster. A missing
+     websiteUri only means the GOOGLE PROFILE returned no website — the
+     business may still have Instagram/booking/directory presence, so
+     unverified leads are POTENTIAL_WEBSITE_LEAD, never NEW_WEBSITE_LEAD.
+  4. Manual checks from config/manual_checks.yml upgrade or downgrade leads:
+     only a hand-verified weak_or_missing presence makes a NEW_WEBSITE_LEAD.
+  5. Category confidence checks the Google place types (and name keywords)
+     against the category that found the lead, and names that look like a
+     plaza/mall/building are flagged as bad category matches.
 
 Usage:
     py scripts/score_leads.py
@@ -29,7 +35,9 @@ from common import (
     is_generic_brand_key,
     load_categories,
     load_json,
+    load_manual_checks,
     make_brand_key,
+    make_core_brand_key,
     name_keyword_hit,
     save_json,
     utc_now_iso,
@@ -37,19 +45,27 @@ from common import (
 
 # ---------------------------------------------------------------------------
 # Scoring rules. Tweak these numbers freely — they are the whole model.
-# A high score means "easy to reach, probably worth money, weak online".
+# A high score means "worth manually verifying first, probably worth money".
+# There is deliberately NO big bonus for a missing websiteUri anymore:
+# only a manual verification can prove weak online presence.
 # ---------------------------------------------------------------------------
-POINTS_BRAND_NO_WEBSITE = 35     # every known location of this brand lacks a site
-POINTS_PROFILE_NO_WEBSITE = 20   # this specific Google profile lacks a site
+POINTS_PROFILE_NO_WEBSITE = 15    # Google profile returned no websiteUri
+POINTS_VERIFIED_WEAK = 25         # manually verified weak/missing presence
 POINTS_HAS_PHONE = 15
-POINTS_GOOD_RATING = 15          # rating >= GOOD_RATING_MIN
-POINTS_MANY_REVIEWS = 15         # review_count >= MANY_REVIEWS_MIN
-POINTS_HIGH_CONFIDENCE = 10      # place types clearly match the category
-POINTS_SERVICE_CATEGORY = 10     # appointment-, quote- or menu-based category
+POINTS_GOOD_RATING = 15           # rating >= GOOD_RATING_MIN
+POINTS_MANY_REVIEWS = 15          # review_count >= MANY_REVIEWS_MIN
+POINTS_HIGH_CONFIDENCE = 10       # place types clearly match the category
+POINTS_SERVICE_CATEGORY = 10      # appointment-, quote- or menu-based category
 POINTS_OPERATIONAL = 5
-PENALTY_BRAND_HAS_WEBSITE = -30  # another location of this brand has a site
-PENALTY_LOW_CONFIDENCE = -25     # probably not the category we scanned for
-PENALTY_LIKELY_CHAIN = -25       # franchise / corporate branch
+PENALTY_BRAND_HAS_WEBSITE = -30   # another location of this brand has a site
+PENALTY_OTHER_PRESENCE = -15      # verified social/booking/directory presence
+PENALTY_LIKELY_CHAIN = -25        # franchise / 3+ locations
+PENALTY_POSSIBLE_MULTI = -20      # possible multi-location brand (2 locations
+                                  # or a likely name match) — not applied on
+                                  # top of PENALTY_LIKELY_CHAIN
+PENALTY_BAD_CATEGORY = -25        # name says plaza/mall/building, types don't
+                                  # prove a real business in the niche
+PENALTY_LOW_CONFIDENCE = -25      # probably not the category we scanned for
 PENALTY_CLOSED_PERMANENTLY = -50
 PENALTY_CLOSED_TEMPORARILY = -25
 
@@ -61,23 +77,50 @@ SIGNIFICANT_BRANCH_MIN_REVIEWS = 25  # busy branch -> worth its own branch page
 LIKELY_CHAIN_MIN_LOCATIONS = 3       # 3+ scanned locations = likely a chain
 MAX_OFFERS_PER_LEAD = 2              # keep the pitch simple
 MAX_LISTED_BRANCH_LOCATIONS = 5      # cap the same_brand_locations list
+MAX_LISTED_BRAND_MATCHES = 5         # cap the possible_brand_match list
+MIN_CORE_KEY_LENGTH = 3              # shorter core keys are too weak to match on
 
-# Website status values (see README, "Website status").
+# Website status values — all of them describe the GOOGLE PROFILE only.
 STATUS_HAS_WEBSITE = "has_website"
 STATUS_BRAND_ELSEWHERE = "brand_has_website_elsewhere"
 STATUS_ALL_MISSING = "all_locations_missing_website"
 STATUS_NEEDS_REVIEW = "needs_manual_review"
 
+# online_presence_status values (see README). Only manual checks can set the
+# "verified" values — the tool never probes Instagram/Facebook/etc. itself.
+PRESENCE_UNKNOWN = "unknown_not_checked"
+PRESENCE_WEAK = "weak_or_missing"
+PRESENCE_SOCIAL = "has_social_presence"
+PRESENCE_BOOKING = "has_booking_presence"
+PRESENCE_DIRECTORY = "has_directory_presence"
+PRESENCE_WEBSITE = "has_website"
+PRESENCE_NEEDS_REVIEW = "needs_manual_review"
+
+VERIFIED_OTHER_PRESENCE = {PRESENCE_SOCIAL, PRESENCE_BOOKING, PRESENCE_DIRECTORY}
+
 # Lead types, roughly from most to least actionable.
-LEAD_NEW_WEBSITE = "NEW_WEBSITE_LEAD"
+LEAD_NEW_WEBSITE = "NEW_WEBSITE_LEAD"          # ONLY after manual verification
+LEAD_POTENTIAL_WEBSITE = "POTENTIAL_WEBSITE_LEAD"  # profile lacks a site, unverified
 LEAD_GBP_CLEANUP = "GBP_CLEANUP_LEAD"
 LEAD_BRANCH_PAGE = "BRANCH_PAGE_LEAD"
 LEAD_MENU_PAGE = "MENU_PAGE_LEAD"
 LEAD_QUOTE_FORM = "QUOTE_FORM_LEAD"
 LEAD_APPOINTMENT = "APPOINTMENT_PAGE_LEAD"
 LEAD_CHATBOT = "CHATBOT_CANDIDATE"
+LEAD_MULTI_LOCATION = "MULTI_LOCATION_BRAND_REVIEW"
+LEAD_BAD_CATEGORY = "BAD_CATEGORY_MATCH"
 LEAD_MANUAL_REVIEW = "NEEDS_MANUAL_REVIEW"
 LEAD_LOW_PRIORITY = "LOW_PRIORITY"
+
+# Words that suggest the profile is a building/location, not a business.
+LOCATION_NAME_KEYWORDS = [
+    "plaza",
+    "mall",
+    "centro comercial",
+    "edificio",
+    "torre",
+    "square",
+]
 
 # If a brand key contains any of these, treat it as a known chain/franchise:
 # the parent company almost certainly has a website even if no scanned
@@ -176,6 +219,7 @@ def build_clusters(leads):
             # (generic names like "salon de belleza"), or we know the brand is
             # a chain whose real website probably wasn't in our scan at all.
             "uncertain": (size > 1 and is_generic_brand_key(key)) or bool(franchise),
+            "generic_name": size > 1 and is_generic_brand_key(key),
             "franchise_keyword": franchise,
             "any_website": next((m["website"] for m in members if m.get("website")), ""),
             "likely_chain": size >= LIKELY_CHAIN_MIN_LOCATIONS or bool(franchise),
@@ -193,7 +237,6 @@ def build_clusters(leads):
 
         lead["cluster_id"] = cluster["cluster_id"]
         lead["cluster_size"] = cluster["size"]
-        lead["is_possible_chain"] = cluster["size"] >= 2 or bool(cluster["franchise_keyword"])
         lead["is_likely_chain"] = cluster["likely_chain"]
         lead["other_locations_count"] = cluster["size"] - 1
         lead["same_brand_locations"] = listed
@@ -201,8 +244,50 @@ def build_clusters(leads):
     return clusters
 
 
+def find_possible_brand_matches(leads):
+    """Flag rows whose CORE brand keys collide across different clusters.
+
+    'Montibello' and 'MONTIBELLO Hair Lounge and MedSpa' have different
+    strict brand keys (so they are NOT auto-merged), but the same core key
+    'montibello' — each gets the other listed in possible_brand_match so a
+    human can decide whether they are one brand.
+    """
+    core_groups = {}
+    for lead in leads:
+        core = make_core_brand_key(lead.get("name", ""))
+        lead["core_brand_key"] = core
+        if len(core) >= MIN_CORE_KEY_LENGTH and not is_generic_brand_key(core):
+            core_groups.setdefault(core, []).append(lead)
+
+    for lead in leads:
+        lead["possible_brand_match"] = []
+        group = core_groups.get(lead["core_brand_key"], [])
+        # Only interesting when the collision crosses cluster boundaries —
+        # rows in the same cluster are already grouped as branches.
+        others = [m for m in group if m["cluster_id"] != lead["cluster_id"]]
+        if not others:
+            continue
+        names = list(dict.fromkeys(m.get("name", "?") for m in others))
+        if len(names) > MAX_LISTED_BRAND_MATCHES:
+            names = names[:MAX_LISTED_BRAND_MATCHES] + [
+                f"(+{len(names) - MAX_LISTED_BRAND_MATCHES} more)"
+            ]
+        lead["possible_brand_match"] = names
+
+    for lead in leads:
+        lead["is_possible_chain"] = (
+            lead["cluster_size"] >= 2
+            or bool(lead["possible_brand_match"])
+            or lead["is_likely_chain"]
+        )
+
+
 def assign_website_status(lead, cluster):
-    """Set the five website flags plus the single website_status value."""
+    """Set the website flags plus the single website_status value.
+
+    Every value describes the GOOGLE PROFILE(S) we scanned — a missing
+    websiteUri does NOT mean the business has no online presence at all.
+    """
     has_site = bool(lead.get("website"))
     lead["has_website"] = has_site
     lead["missing_profile_website"] = not has_site
@@ -213,7 +298,7 @@ def assign_website_status(lead, cluster):
 
     if has_site:
         lead["website_status"] = STATUS_HAS_WEBSITE
-    elif cluster["uncertain"]:
+    elif cluster["uncertain"] or lead["possible_brand_match"]:
         lead["website_status"] = STATUS_NEEDS_REVIEW
         lead["needs_manual_review"] = True
         if cluster["any_website"]:
@@ -244,6 +329,14 @@ def match_types(place_types, patterns):
     return matched
 
 
+def lead_place_types(lead):
+    """All Google types we know for a lead (types list + primary type)."""
+    types = set(lead.get("types") or [])
+    if lead.get("primary_type"):
+        types.add(lead["primary_type"])
+    return types
+
+
 def category_confidence(lead, category):
     """How sure are we this lead really belongs to the scanned category?
 
@@ -251,9 +344,7 @@ def category_confidence(lead, category):
     High requires the Google place types to match the category; excluded
     types/keywords push a lead down unless the types clearly support it.
     """
-    types = set(lead.get("types") or [])
-    if lead.get("primary_type"):
-        types.add(lead["primary_type"])
+    types = lead_place_types(lead)
 
     type_match = match_types(types, category["included_types"] + category["also_match_types"])
     type_conflict = match_types(types, category["excluded_types"])
@@ -302,20 +393,78 @@ def pick_category(lead, categories):
     return categories[best_label], best_label, best_level, best_reason
 
 
+def detect_bad_category(lead, category):
+    """Does the NAME say this is a plaza/mall/building rather than a business?
+
+    Returns (confirmed, suspect, keyword):
+      confirmed - location word in the name and NO type evidence for the
+                  category -> BAD_CATEGORY_MATCH.
+      suspect   - location word in the name but the types do claim the
+                  category (e.g. a plaza profile typed beauty_salon because
+                  of its tenants) -> needs manual review, no auto-penalty.
+    """
+    keyword = name_keyword_hit(lead.get("name", ""), LOCATION_NAME_KEYWORDS)
+    if not keyword:
+        return False, False, None
+    if category is None:
+        return True, False, keyword
+    type_proof = match_types(
+        lead_place_types(lead),
+        category["included_types"] + category["also_match_types"],
+    )
+    if type_proof:
+        return False, True, keyword
+    return True, False, keyword
+
+
+def resolve_online_presence(lead, manual):
+    """Combine profile data + manual verification into online_presence_status."""
+    if manual:
+        return manual["online_presence"]
+    if lead["has_website"]:
+        return PRESENCE_WEBSITE
+    if (
+        lead["website_status"] == STATUS_NEEDS_REVIEW
+        or lead["possible_brand_match"]
+        or lead["bad_category_match"]
+        or lead["bad_category_suspect"]
+    ):
+        return PRESENCE_NEEDS_REVIEW
+    return PRESENCE_UNKNOWN
+
+
 def pick_lead_type(lead, category):
     """Classify what kind of opportunity this lead is."""
     status = lead.get("business_status", "")
     if status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
         return LEAD_LOW_PRIORITY
-    if lead["website_status"] == STATUS_NEEDS_REVIEW or lead["category_confidence"] == "low":
+    if lead["bad_category_match"]:
+        return LEAD_BAD_CATEGORY
+    if lead["category_confidence"] == "low" or lead["bad_category_suspect"]:
         return LEAD_MANUAL_REVIEW
-    if lead["all_locations_missing_website"]:
-        return LEAD_NEW_WEBSITE
-    if lead["brand_has_website_elsewhere"]:
-        if (lead.get("review_count") or 0) >= SIGNIFICANT_BRANCH_MIN_REVIEWS:
-            return LEAD_BRANCH_PAGE
-        return LEAD_GBP_CLEANUP
-    # From here on the profile has a website.
+
+    profile_or_verified_site = lead["has_website"] or (
+        lead["online_presence_status"] == PRESENCE_WEBSITE
+    )
+    if not profile_or_verified_site:
+        if lead["brand_has_website_elsewhere"]:
+            if (lead.get("review_count") or 0) >= SIGNIFICANT_BRANCH_MIN_REVIEWS:
+                return LEAD_BRANCH_PAGE
+            return LEAD_GBP_CLEANUP
+        if (
+            lead["possible_brand_match"]
+            or lead["is_likely_chain"]
+            or (lead["cluster_size"] >= 2 and not lead["cluster_uncertain"])
+        ):
+            return LEAD_MULTI_LOCATION
+        if lead["website_status"] == STATUS_NEEDS_REVIEW:
+            return LEAD_MANUAL_REVIEW
+        if lead["online_presence_status"] == PRESENCE_WEAK:
+            return LEAD_NEW_WEBSITE  # only reachable via manual verification
+        return LEAD_POTENTIAL_WEBSITE
+
+    # The business has a website (on the profile, or found manually) —
+    # look for optimization work instead of a new site.
     if category:
         if category["menu_based"]:
             return LEAD_MENU_PAGE
@@ -334,11 +483,16 @@ def score_lead(lead, category):
     rating = lead.get("rating")
     review_count = lead.get("review_count") or 0
     status = lead.get("business_status", "")
+    presence = lead["online_presence_status"]
 
-    if lead["all_locations_missing_website"]:
-        score += POINTS_BRAND_NO_WEBSITE
     if lead["missing_profile_website"]:
         score += POINTS_PROFILE_NO_WEBSITE
+    if presence == PRESENCE_WEAK:
+        score += POINTS_VERIFIED_WEAK
+    if presence in VERIFIED_OTHER_PRESENCE or (
+        presence == PRESENCE_WEBSITE and not lead["has_website"]
+    ):
+        score += PENALTY_OTHER_PRESENCE
     if lead.get("phone"):
         score += POINTS_HAS_PHONE
     if rating is not None and rating >= GOOD_RATING_MIN:
@@ -361,25 +515,68 @@ def score_lead(lead, category):
         score += PENALTY_BRAND_HAS_WEBSITE
     if lead["category_confidence"] == "low":
         score += PENALTY_LOW_CONFIDENCE
+    if lead["bad_category_match"]:
+        score += PENALTY_BAD_CATEGORY
     if lead["is_likely_chain"]:
         score += PENALTY_LIKELY_CHAIN
+    elif lead["is_possible_chain"]:
+        score += PENALTY_POSSIBLE_MULTI
     return score
 
 
+def pick_verification_priority(lead):
+    """How urgently should a human verify this lead's real online presence?
+
+    high   = promising unverified lead — check these first
+    medium = worth checking, but weaker or murkier signals
+    low    = already verified, already has a site, or not worth the time
+    """
+    if lead["manually_verified"]:
+        return "low"
+    if lead["has_website"]:
+        return "low"
+    if lead["lead_type"] in (LEAD_LOW_PRIORITY, LEAD_BAD_CATEGORY):
+        return "low"
+    if lead["category_confidence"] == "low":
+        return "low"
+    if (
+        lead["lead_type"] == LEAD_POTENTIAL_WEBSITE
+        and lead["category_confidence"] == "high"
+        and lead.get("business_status") == "OPERATIONAL"
+    ):
+        return "high"
+    return "medium"
+
+
 def build_recommended_offer(lead, category):
-    """Pick up to MAX_OFFERS_PER_LEAD service suggestions for this lead."""
+    """Pick up to MAX_OFFERS_PER_LEAD service suggestions for this lead.
+
+    Wording stays non-definitive until the lead's online presence has been
+    manually verified — the scan alone can't prove a business has nothing.
+    """
     offers = []
-    status = lead["website_status"]
+    lead_type = lead["lead_type"]
     review_count = lead.get("review_count") or 0
 
-    if status == STATUS_NEEDS_REVIEW:
-        offers.append("Verify brand and branches manually before pitching")
-    elif status == STATUS_ALL_MISSING:
+    if lead_type == LEAD_BAD_CATEGORY:
+        offers.append("Probably not a business in this category — skip unless verified")
+    elif lead_type == LEAD_MULTI_LOCATION:
+        offers.append("Confirm brand/branches manually before pitching anything")
+    elif lead_type == LEAD_MANUAL_REVIEW:
+        offers.append("Verify what this business is (and its online presence) manually")
+    elif lead_type == LEAD_NEW_WEBSITE:
         offers.append("One-page website + WhatsApp button")
-    elif status == STATUS_BRAND_ELSEWHERE:
+    elif lead_type == LEAD_POTENTIAL_WEBSITE:
+        offers.append(
+            "Check online presence first (quick links in report); "
+            "if weak: one-page website + WhatsApp button"
+        )
+    elif lead_type in (LEAD_GBP_CLEANUP, LEAD_BRANCH_PAGE):
         offers.append("Google Business Profile cleanup: add correct website link to this branch")
-        if lead["lead_type"] == LEAD_BRANCH_PAGE:
+        if lead_type == LEAD_BRANCH_PAGE:
             offers.append("Branch page on the existing brand website")
+    elif lead["online_presence_status"] == PRESENCE_WEBSITE and not lead["has_website"]:
+        offers.append("Google Business Profile cleanup: link the website you found to the profile")
 
     if category:
         if category["menu_based"]:
@@ -398,21 +595,31 @@ def build_recommended_offer(lead, category):
     return " + ".join(offers[:MAX_OFFERS_PER_LEAD])
 
 
-def build_notes(lead, cluster, confidence_reason):
+def build_notes(lead, cluster, confidence_reason, manual):
     """Human-readable warnings that explain the flags on this lead."""
     notes = []
+    if manual and manual.get("note"):
+        notes.append(f"manual check: {manual['note']}")
+    elif manual:
+        notes.append(f"manually verified: {manual['online_presence']}")
     if confidence_reason:
         notes.append(confidence_reason)
+    if lead["bad_category_match"]:
+        notes.append("name looks like a plaza/mall/building, and types don't prove otherwise")
+    elif lead["bad_category_suspect"]:
+        notes.append("name looks like a plaza/mall/building — types claim the category, verify")
+    if lead["possible_brand_match"]:
+        notes.append("similar name to: " + "; ".join(lead["possible_brand_match"]))
     if cluster["franchise_keyword"]:
         notes.append(f"known chain/franchise ('{cluster['franchise_keyword']}')")
-    elif lead["cluster_size"] >= 2 and lead["cluster_uncertain"]:
+    elif lead["cluster_size"] >= 2 and cluster["generic_name"]:
         notes.append("generic name — same-name places may be unrelated businesses")
     elif lead["cluster_size"] >= 2:
         notes.append(f"{lead['other_locations_count']} other location(s) with the same brand")
     if lead["brand_has_website_elsewhere"] and lead["brand_website_example"]:
         notes.append(f"brand site found on another branch: {lead['brand_website_example']}")
-    if lead["missing_profile_website"] and lead["website_status"] != STATUS_ALL_MISSING:
-        notes.append("missing website on THIS profile only — verify before pitching a new site")
+    if not manual and lead["missing_profile_website"]:
+        notes.append("no websiteUri on the Google profile — online presence not verified yet")
     return "; ".join(notes)
 
 
@@ -432,11 +639,13 @@ def main():
 
     try:
         categories = {cat["label"]: cat for cat in load_categories()}
+        manual_checks = load_manual_checks()
     except ConfigError as exc:
         die(str(exc))
 
     leads, duplicates = upgrade_and_dedupe(raw_leads)
     clusters = build_clusters(leads)
+    find_possible_brand_matches(leads)
 
     for lead in leads:
         cluster = clusters[lead["brand_key"]]
@@ -446,38 +655,56 @@ def main():
         lead["matched_category"] = matched_label
         lead["category_confidence"] = confidence
 
+        confirmed, suspect, _keyword = detect_bad_category(lead, category)
+        lead["bad_category_match"] = confirmed
+        lead["bad_category_suspect"] = suspect
+
+        manual = manual_checks.get(lead["id"])
+        lead["manually_verified"] = bool(manual)
+        lead["online_presence_status"] = resolve_online_presence(lead, manual)
+
         lead["lead_type"] = pick_lead_type(lead, category)
         lead["lead_score"] = score_lead(lead, category)
+        lead["manual_verification_priority"] = pick_verification_priority(lead)
         lead["recommended_offer"] = build_recommended_offer(lead, category)
         lead["review_needed"] = (
             lead["needs_manual_review"]
             or lead["category_confidence"] == "low"
+            or lead["bad_category_match"]
+            or lead["bad_category_suspect"]
+            or bool(lead["possible_brand_match"])
             or (lead["is_possible_chain"] and lead["missing_profile_website"])
         )
-        lead["notes"] = build_notes(lead, cluster, reason)
+        lead["notes"] = build_notes(lead, cluster, reason, manual)
 
     leads.sort(key=lambda lead: lead["lead_score"], reverse=True)
     save_json(SCORED_LEADS_FILE, {"scored_at": utc_now_iso(), "leads": leads})
 
     chains = sum(1 for c in clusters.values() if c["size"] >= 2)
+    flagged = sum(1 for lead in leads if lead["possible_brand_match"])
+    verified = sum(1 for lead in leads if lead["manually_verified"])
     print(f"Scored {len(leads)} leads -> {SCORED_LEADS_FILE}")
     if duplicates:
         print(f"  merged {duplicates} duplicate row(s) with the same place id")
-    print(f"  brand clusters: {len(clusters)} ({chains} with 2+ locations)")
-    for status in (STATUS_ALL_MISSING, STATUS_BRAND_ELSEWHERE, STATUS_NEEDS_REVIEW, STATUS_HAS_WEBSITE):
-        count = sum(1 for lead in leads if lead["website_status"] == status)
-        print(f"  {status}: {count}")
+    print(f"  brand clusters: {len(clusters)} ({chains} with 2+ locations, "
+          f"{flagged} rows with possible name matches)")
+    print(f"  manually verified so far: {verified} (config/manual_checks.yml)")
+    for priority in ("high", "medium", "low"):
+        count = sum(1 for lead in leads if lead["manual_verification_priority"] == priority)
+        print(f"  verification priority {priority}: {count}")
     print()
     print(f"Top {min(args.top, len(leads))} leads:")
-    print(f"  {'SCORE':>5}  {'BUSINESS':<32} {'CATEGORY':<14} {'CONF':<6} {'WEBSITE STATUS':<28} LEAD TYPE")
+    print(f"  {'SCORE':>5}  {'BUSINESS':<32} {'CATEGORY':<14} {'CONF':<6} {'PRESENCE':<22} LEAD TYPE")
     for lead in leads[: args.top]:
         name = (lead.get("name") or "?")[:32]
         print(
             f"  {lead['lead_score']:>5}  {name:<32} {lead.get('matched_category', '?'):<14} "
-            f"{lead['category_confidence']:<6} {lead['website_status']:<28} {lead['lead_type']}"
+            f"{lead['category_confidence']:<6} {lead['online_presence_status']:<22} {lead['lead_type']}"
         )
     print()
     print("Next step: py scripts/export_report.py")
+    print("Then: verify top leads with the report's quick links and record what")
+    print("you find in config/manual_checks.yml, re-run this script, and re-export.")
 
 
 if __name__ == "__main__":

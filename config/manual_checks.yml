@@ -1,0 +1,31 @@
+# Manual online-presence verification results.
+#
+# The scanner can only see whether a Google Places profile returns a
+# websiteUri. Many businesses have Instagram, Facebook, Fresha/Booksy,
+# directories or a site that simply is not linked on their Google profile.
+# Use the "Quick search" links in reports/leads.html to check a business by
+# hand, then record what you found here and re-run:
+#
+#     py scripts/score_leads.py
+#     py scripts/export_report.py
+#
+# Fields per check:
+#   place_id        - the "id" column in reports/leads.csv (or reports/leads.json)
+#   online_presence - what you found. One of:
+#                       weak_or_missing        (nothing meaningful found -> +25 score,
+#                                               lead becomes NEW_WEBSITE_LEAD)
+#                       has_social_presence    (active Instagram/Facebook -> -15 score)
+#                       has_booking_presence   (Fresha/Booksy/etc. -> -15 score)
+#                       has_directory_presence (directory/tenant page -> -15 score)
+#                       has_website            (real site exists, just not on the
+#                                               profile -> treated as having a site;
+#                                               the offer becomes a profile fix)
+#   note            - optional free text (what you found, where)
+#
+# Example:
+#   checks:
+#     - place_id: ChIJD9-G5OCJr44Ra97CXxJJt_A
+#       online_presence: has_social_presence
+#       note: "Active Instagram @example, no website"
+
+checks: []
