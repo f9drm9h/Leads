@@ -46,6 +46,7 @@ FIELD_MASK = ",".join(
         "places.id",
         "places.displayName",
         "places.primaryType",
+        "places.types",
         "places.formattedAddress",
         "places.nationalPhoneNumber",
         "places.websiteUri",
@@ -150,6 +151,7 @@ def normalize_place(place, area_label, category_label, scanned_at):
         "id": place_id,
         "name": display_name.get("text", ""),
         "primary_type": place.get("primaryType", ""),
+        "types": place.get("types") or [],
         "address": place.get("formattedAddress", ""),
         "phone": place.get("nationalPhoneNumber", ""),
         "website": place.get("websiteUri", ""),
@@ -157,10 +159,33 @@ def normalize_place(place, area_label, category_label, scanned_at):
         "rating": place.get("rating"),  # stays None when a place has no ratings
         "review_count": place.get("userRatingCount", 0),
         "business_status": place.get("businessStatus", ""),
+        # Last scan that saw this place (kept for backward compatibility)...
         "source_area": area_label,
         "source_category": category_label,
+        # ...and the full history of areas/categories that found it. When the
+        # same place id shows up again, these lists are merged, not replaced.
+        "source_areas": [area_label],
+        "source_categories": [category_label],
         "scanned_at": scanned_at,
     }
+
+
+def upgrade_record(lead):
+    """Bring a lead saved by an older version up to the current shape."""
+    if not isinstance(lead.get("source_areas"), list):
+        lead["source_areas"] = [lead["source_area"]] if lead.get("source_area") else []
+    if not isinstance(lead.get("source_categories"), list):
+        lead["source_categories"] = (
+            [lead["source_category"]] if lead.get("source_category") else []
+        )
+    if not isinstance(lead.get("types"), list):
+        lead["types"] = []
+    return lead
+
+
+def merge_source_lists(old_values, new_values):
+    """Union of two lists, keeping first-seen order."""
+    return list(dict.fromkeys(list(old_values) + list(new_values)))
 
 
 def pick(items, label, kind):
@@ -215,7 +240,7 @@ def main():
             existing = load_json(SCAN_RESULTS_FILE, default=[])
         except ConfigError as exc:
             die(f"{exc}\n  The file may be corrupted — rerun with --fresh to start over.")
-    results = {lead["id"]: lead for lead in existing if lead.get("id")}
+    results = {lead["id"]: upgrade_record(lead) for lead in existing if lead.get("id")}
 
     scanned_at = utc_now_iso()
     pairs = [(area, cat) for area in selected_areas for cat in selected_categories]
@@ -239,7 +264,16 @@ def main():
             lead = normalize_place(place, area["label"], category["label"], scanned_at)
             if lead is None:
                 continue
-            if lead["id"] in results:
+            previous = results.get(lead["id"])
+            if previous is not None:
+                # Same place id seen before: the fresh scan wins for the data
+                # fields, but we keep every area/category that ever found it.
+                lead["source_areas"] = merge_source_lists(
+                    previous["source_areas"], lead["source_areas"]
+                )
+                lead["source_categories"] = merge_source_lists(
+                    previous["source_categories"], lead["source_categories"]
+                )
                 refreshed_count += 1
             else:
                 new_count += 1

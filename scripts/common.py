@@ -5,7 +5,9 @@ module so file paths, config loading and JSON handling live in one place.
 """
 
 import json
+import re
 import sys
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -148,6 +150,25 @@ def load_categories():
         for key in ("appointment_based", "quote_based", "menu_based"):
             if not isinstance(category[key], bool):
                 raise ConfigError(f"{where} ('{label}'): '{key}' must be true or false.")
+
+        # Optional keys used by the category-confidence filter. They default
+        # to empty / false so older config files keep working unchanged.
+        for key in (
+            "excluded_name_keywords",
+            "excluded_types",
+            "also_match_types",
+            "included_name_keywords",
+        ):
+            value = category.setdefault(key, [])
+            if not isinstance(value, list) or not all(
+                isinstance(v, str) and v.strip() for v in value
+            ):
+                raise ConfigError(
+                    f"{where} ('{label}'): '{key}' must be a list of text values "
+                    "(an empty list [] is fine)."
+                )
+        if not isinstance(category.setdefault("question_heavy", False), bool):
+            raise ConfigError(f"{where} ('{label}'): 'question_heavy' must be true or false.")
     return categories
 
 
@@ -170,3 +191,142 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(data, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
+
+
+# ---------------------------------------------------------------------------
+# Text normalization and brand keys.
+#
+# A "brand key" is a simplified version of a business name used to group
+# multiple Google profiles of the same brand (branches) into one cluster.
+# The rules are deliberately conservative: two leads only cluster together
+# when their normalized names are IDENTICAL — there is no fuzzy matching,
+# because over-merging unrelated businesses is worse than missing a branch.
+# ---------------------------------------------------------------------------
+_PARENS_RE = re.compile(r"\([^)]*\)")
+_NON_ALNUM_RE = re.compile(r"[^0-9a-z]+")
+
+# Legal/company suffixes stripped from the END of a name (longest first).
+# Covers the dotted forms too: after punctuation removal "S.R.L." -> "s r l".
+_COMPANY_SUFFIX_SEQUENCES = [
+    ("c", "por", "a"),
+    ("c", "x", "a"),
+    ("e", "i", "r", "l"),
+    ("s", "r", "l"),
+    ("s", "a"),
+    ("eirl",),
+    ("srl",),
+    ("sa",),
+    ("inc",),
+    ("ltd",),
+    ("llc",),
+    ("rd",),
+]
+
+# Tokens that describe WHAT a business is rather than WHO it is. A brand key
+# made up entirely of these (e.g. "salon de belleza") identifies nothing, so
+# a multi-member cluster with such a key is treated as UNCERTAIN — flagged
+# for manual review instead of being trusted as one brand.
+GENERIC_BRAND_TOKENS = {
+    # connectors / filler
+    "de", "del", "la", "el", "los", "las", "y", "e", "d", "mi", "don", "dona",
+    "the", "and", "in", "no", "num",
+    # beauty
+    "barberia", "barber", "barbershop", "salon", "salones", "belleza",
+    "beauty", "spa", "nails", "nail", "unas", "peluqueria", "estetica",
+    "estilo", "estilos", "look", "hair", "studio", "estudio",
+    # food
+    "restaurante", "restaurant", "comedor", "cafeteria", "cafe", "coffee",
+    "pizzeria", "pizza", "pica", "pollo", "bar", "grill", "food", "comida",
+    "cocina", "panaderia", "reposteria", "bakery", "drink", "drinks",
+    # auto
+    "taller", "mecanica", "repuestos", "gomera", "gomas", "auto", "autos",
+    "car", "wash", "carwash", "lavado", "autolavado", "detailing", "adornos",
+    # phones / electronics
+    "celulares", "celular", "cell", "phone", "phones", "movil", "moviles",
+    "electronica", "electronics", "repair", "reparacion", "reparaciones",
+    "tecnologia", "tech", "comunicaciones",
+    # events
+    "eventos", "evento", "fiestas", "party", "decoracion", "decoraciones",
+    "floristeria", "flores", "catering",
+    # commerce / places
+    "colmado", "supermercado", "market", "minimarket", "tienda", "store",
+    "shop", "boutique", "centro", "plaza", "casa", "grupo", "group",
+    "servicio", "servicios", "multiservicios", "soluciones", "shopping",
+    "dominicana", "dominicano", "nacional", "internacional", "express",
+}
+
+
+def strip_accents(text):
+    """Remove accents: 'peluquería' -> 'peluqueria'."""
+    decomposed = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in decomposed if not unicodedata.combining(ch))
+
+
+def normalize_text(text):
+    """Lowercase, remove accents, turn punctuation into spaces, collapse spaces.
+
+    Used for keyword matching against business names.
+    """
+    text = strip_accents(str(text or "").lower())
+    return _NON_ALNUM_RE.sub(" ", text).strip()
+
+
+def make_brand_key(name):
+    """Build the normalized brand key for a business name.
+
+    Steps: lowercase -> remove accents -> drop '(...)' branch hints ->
+    punctuation to spaces -> strip trailing company suffixes (SRL, S.A.,
+    RD, ...) -> collapse whitespace. The original name is never modified;
+    this only derives a grouping key from a copy.
+    """
+    text = strip_accents(str(name or "").lower())
+    text = _PARENS_RE.sub(" ", text)
+    text = _NON_ALNUM_RE.sub(" ", text)
+    tokens = text.split()
+
+    stripped = True
+    while stripped and tokens:
+        stripped = False
+        for seq in _COMPANY_SUFFIX_SEQUENCES:
+            n = len(seq)
+            # '>' (not '>=') so a name that IS just a suffix keeps its name.
+            if len(tokens) > n and tuple(tokens[-n:]) == seq:
+                tokens = tokens[:-n]
+                stripped = True
+                break
+    return " ".join(tokens)
+
+
+def is_generic_brand_key(brand_key):
+    """True when a brand key says nothing distinctive about the business.
+
+    'salon de belleza' -> True (all generic words); 'salon anyelina' -> False.
+    Multi-member clusters with a generic key are flagged for manual review.
+    """
+    tokens = brand_key.split()
+    if not tokens:
+        return True
+    return all(token in GENERIC_BRAND_TOKENS or token.isdigit() for token in tokens)
+
+
+def name_keyword_hit(name, keywords):
+    """Return the first keyword that matches the business name, else None.
+
+    Keywords match whole words in the normalized name ('auto' does not match
+    'autorizado'). A trailing '*' makes it a prefix match ('auto*' matches
+    'autopartes'). Multi-word keywords match as a phrase ('aire acondicionado').
+    """
+    haystack = normalize_text(name)
+    if not haystack:
+        return None
+    for keyword in keywords or []:
+        needle = normalize_text(keyword.rstrip("*"))
+        if not needle:
+            continue
+        if keyword.rstrip().endswith("*"):
+            pattern = r"(?:^|\s)" + re.escape(needle) + r"[0-9a-z]*"
+        else:
+            pattern = r"(?:^|\s)" + re.escape(needle) + r"(?:\s|$)"
+        if re.search(pattern, haystack):
+            return keyword
+    return None

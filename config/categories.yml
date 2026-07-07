@@ -3,16 +3,36 @@
 # Fields per category:
 #   label             - short name you use on the command line (--category salons)
 #   included_types    - official Google Places API (New) place types ("Table A").
-#                       Full list:
+#                       These are SENT TO THE API, so an invalid type makes the
+#                       API reject the whole request. Full list:
 #                       https://developers.google.com/maps/documentation/places/web-service/place-types
-#                       An invalid type makes the API reject the whole request.
+#   also_match_types  - extra place types that count as a match when judging
+#                       category confidence. NOT sent to the API, so unknown
+#                       values are harmless here. A '*' at either end works
+#                       as a wildcard: "*_restaurant" matches every cuisine.
+#   excluded_types    - place types that mean "this is NOT the business we
+#                       want" (an auto shop in a phone-repair scan). Not sent
+#                       to the API either; '*' wildcards work here too.
+#   excluded_name_keywords - words in the business NAME that flag a mismatch.
+#                       Matching is accent-insensitive and whole-word;
+#                       a trailing * matches word prefixes ("auto*" matches
+#                       "autopartes" but plain "auto" does not match
+#                       "autorizado"). Multi-word phrases are allowed.
+#   included_name_keywords - name words that SUPPORT the category when the
+#                       place types are inconclusive.
 #   appointment_based - true if customers book time slots (salons, mechanics...)
 #   quote_based       - true if customers ask for a price quote (repairs, events...)
 #   menu_based        - true if the business sells from a menu/catalog (food...)
+#   question_heavy    - true if customers ask lots of questions before buying
+#                       (only then is an FAQ chatbot ever recommended)
 #   recommended_offer - fallback service suggestion when no specific rule matches
 #
-# The three true/false flags feed both the lead score (+15 if any is true)
-# and the recommended-offer logic in scripts/score_leads.py.
+# How confidence works (scripts/score_leads.py):
+#   high   = the place's Google types match included_types/also_match_types
+#   medium = types are missing/generic, or signals conflict (needs a look)
+#   low    = types or name keywords point to a different kind of business
+# Low-confidence leads are scored down and marked NEEDS_MANUAL_REVIEW,
+# never silently deleted.
 
 categories:
   - label: salons
@@ -21,18 +41,89 @@ categories:
       - hair_salon
       - barber_shop
       - nail_salon
+      - spa
+    also_match_types:
+      - hair_care
+      - beautician
+      - makeup_artist
+      - massage
+      - sauna
+      - skin_care_clinic
+    excluded_types: []
+    excluded_name_keywords: []
+    included_name_keywords:
+      - barberia
+      - peluqueria
+      - salon
+      - "unas"
+      - nails
+      - lashes
+      - pestanas
+      - cejas
+      - brows
+      - estetica
     appointment_based: true
     quote_based: false
     menu_based: false
+    question_heavy: false
     recommended_offer: "Appointment booking page with WhatsApp button"
 
   - label: phone_repair
     included_types:
       - cell_phone_store
       - electronics_store
+    also_match_types:
+      - computer_store
+      - electronics_repair_shop
+    excluded_types:
+      - car_repair
+      - car_dealer
+      - car_wash
+      - auto_parts_store
+      - hardware_store
+      - home_goods_store
+      - home_improvement_store
+      - furniture_store
+      - appliance_store
+      - electrician
+      - plumber
+      - general_contractor
+      - telecommunications_service_provider
+    excluded_name_keywords:
+      - auto*
+      - refrigeracion
+      - nevera*
+      - freezer*
+      - "aire acondicionado"
+      - climatizacion
+      - lavadora*
+      - estufa*
+      - electrodomestico*
+      - inversor*
+      - "planta electrica"
+      - "plantas electricas"
+      - industrial*
+      - motores
+      - moto
+      - motos
+      - motocicleta*
+      - bomba*
+      - ferreteria
+      - gomas
+      - gomera
+    included_name_keywords:
+      - celular*
+      - phone*
+      - iphone
+      - movil*
+      - telefono*
+      - electronica
+      - reparacion
+      - repair
     appointment_based: false
     quote_based: true
     menu_based: false
+    question_heavy: true
     recommended_offer: "Repair quote form with WhatsApp button"
 
   - label: auto_services
@@ -40,9 +131,35 @@ categories:
       - car_repair
       - car_wash
       - auto_parts_store
+    also_match_types:
+      - car_dealer
+      - tire_shop
+      - car_detailing
+      - oil_change_service
+      - gas_station
+    excluded_types:
+      - restaurant
+      - lodging
+    excluded_name_keywords: []
+    included_name_keywords:
+      - taller
+      - mecanica
+      - gomas
+      - gomera
+      - repuestos
+      - "car wash"
+      - autolavado
+      - detailing
+      - polarizado
+      - tinte*
+      - alarma*
+      - "car audio"
+      - desabolladura
+      - pintura
     appointment_based: true
     quote_based: true
     menu_based: false
+    question_heavy: false
     recommended_offer: "Service quote form and booking page"
 
   - label: restaurants
@@ -50,9 +167,48 @@ categories:
       - restaurant
       - cafe
       - bakery
+      - bar
+      - pizza_restaurant
+      - fast_food_restaurant
+    also_match_types:
+      - "*_restaurant"          # mexican_restaurant, seafood_restaurant, ...
+      - meal_takeaway
+      - meal_delivery
+      - coffee_shop
+      - sandwich_shop
+      - ice_cream_shop
+      - dessert_shop
+      - pastry_shop
+      - donut_shop
+      - diner
+      - bar_and_grill
+      - food_court
+    excluded_types:
+      - sports_club
+      - gym
+      - casino
+      - lodging
+      - supermarket
+      - grocery_store
+      - movie_theater
+    excluded_name_keywords:
+      - "club deportivo"
+      - hotel
+      - supermercado
+    included_name_keywords:
+      - restaurante
+      - comedor
+      - "pica pollo"
+      - picapollo
+      - pizzeria
+      - cafeteria
+      - panaderia
+      - reposteria
+      - "food truck"
     appointment_based: false
     quote_based: false
     menu_based: true
+    question_heavy: false
     recommended_offer: "One-page site with menu and WhatsApp orders"
 
   - label: event_services
@@ -60,7 +216,33 @@ categories:
       - event_venue
       - banquet_hall
       - wedding_venue
+      - florist
+    also_match_types:
+      - photographer
+      - photography_studio
+      - caterer
+      - catering_service
+      - dj_service
+      - party_planner
+      - event_planner
+    excluded_types:
+      - lodging
+      - night_club
+    excluded_name_keywords: []
+    included_name_keywords:
+      - eventos
+      - "salon de eventos"
+      - decoracion*
+      - catering
+      - dj
+      - fotografia
+      - fotografo*
+      - floristeria
+      - bodas
+      - novias
+      - fiestas
     appointment_based: false
     quote_based: true
     menu_based: false
+    question_heavy: true
     recommended_offer: "Quote request form with photo gallery"

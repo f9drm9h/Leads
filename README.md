@@ -21,8 +21,9 @@ outreach → re-scan next time for fresh data.
 ```
 config/scan_areas.yml     config/categories.yml
         \                   /
-   scripts/scan_places.py     ->  data/scan_results.json   (raw, deduplicated)
-   scripts/score_leads.py     ->  data/leads_scored.json   (+ score + offer)
+   scripts/scan_places.py     ->  data/scan_results.json   (raw, deduplicated by place id)
+   scripts/score_leads.py     ->  data/leads_scored.json   (+ brand clusters + website
+                                                            status + confidence + score)
    scripts/export_report.py   ->  reports/leads.csv / leads.json / leads.html
 ```
 
@@ -94,16 +95,35 @@ phone repair, auto services, restaurants, event services):
 ```yaml
 categories:
   - label: salons
-    included_types: [beauty_salon, hair_salon, barber_shop, nail_salon]
+    included_types: [beauty_salon, hair_salon, barber_shop, nail_salon, spa]
+    also_match_types: [hair_care, skin_care_clinic]   # count as a match, not sent to API
+    excluded_types: []              # types that mean "wrong kind of business"
+    excluded_name_keywords: []      # name words that flag a mismatch
+    included_name_keywords: [barberia, peluqueria]    # name words that support a match
     appointment_based: true    # customers book time slots
     quote_based: false         # customers ask for price quotes
     menu_based: false          # business sells from a menu/catalog
+    question_heavy: false      # customers ask lots of questions before buying
     recommended_offer: "Appointment booking page with WhatsApp button"
 ```
 
 `included_types` must be official place types from Google's "Table A" list:
 <https://developers.google.com/maps/documentation/places/web-service/place-types>
 An invalid type makes the API reject that request with a 400 error.
+
+The other type/keyword lists are only used locally to judge **category
+confidence**, so anything is safe there. Type patterns accept a `*` wildcard
+at either end (`*_restaurant`); name keywords match whole words without
+accents, and a trailing `*` matches prefixes (`auto*` matches "autopartes"
+but plain `auto` does not match "autorizado").
+
+- **high** confidence: the place's Google types match the category
+- **medium**: types missing/generic, or the signals conflict — worth a look
+- **low**: the types or name clearly point to a different kind of business
+  (e.g. a refrigeration shop that showed up in the phone-repair scan)
+
+Low-confidence leads are never deleted — they are scored down and marked
+`NEEDS_MANUAL_REVIEW` so you can judge them yourself.
 
 ## Run it
 
@@ -124,36 +144,102 @@ Repeated scans **merge**: results are deduplicated by Google place id, and a
 re-scan refreshes the stored data for the places it finds (this is how you
 refresh data before an outreach round). Use `--fresh` to wipe and start over.
 
+## Brand clusters — how branches are handled
+
+Businesses are grouped by a normalized **brand key**: the name is lowercased,
+accents and punctuation are removed, `(...)` branch hints and company
+suffixes (SRL, S.R.L., S.A., RD, ...) are stripped. Leads whose keys are
+**identical** form one cluster — there is no fuzzy matching, because merging
+two unrelated businesses is worse than missing a branch.
+
+Every lead gets: `brand_key`, `cluster_id`, `cluster_size`,
+`is_possible_chain`, `other_locations_count` and `same_brand_locations`.
+**Branches are grouped and labeled, never deleted** — every location stays
+in the report.
+
+Clusters are treated as *uncertain* when the shared name is generic
+("Salon de Belleza" twice is probably two different businesses) or when the
+brand is a known chain/franchise — those leads are flagged for manual review
+instead of being trusted.
+
+## Website status
+
+**"Missing website" always means missing from that specific Google Places
+profile — NOT necessarily missing from the whole company.** The status looks
+across the brand cluster to tell those cases apart:
+
+| `website_status` | Meaning |
+|---|---|
+| `has_website` | This profile links a website. |
+| `brand_has_website_elsewhere` | This profile has no website, but another scanned location of the same brand does. Don't pitch a new site — fix the profile link. |
+| `all_locations_missing_website` | No scanned location of this brand has a website. The strongest "needs a website" signal this tool can give. |
+| `needs_manual_review` | No website on the profile and the brand cluster is uncertain (generic name or known chain) — verify by hand. |
+
+Remember the tool only knows the locations **it scanned**: a brand can have
+a website (or more branches) outside your scan areas. `all_locations_missing_website`
+is evidence, not proof.
+
+## Lead types
+
+Each lead is classified so you can filter the list by the kind of work:
+`NEW_WEBSITE_LEAD`, `GBP_CLEANUP_LEAD` (profile missing its brand's website
+link), `BRANCH_PAGE_LEAD` (busy branch of a brand with a site elsewhere),
+`MENU_PAGE_LEAD`, `QUOTE_FORM_LEAD`, `APPOINTMENT_PAGE_LEAD`,
+`CHATBOT_CANDIDATE` (question-heavy category with 50+ reviews),
+`NEEDS_MANUAL_REVIEW`, and `LOW_PRIORITY` (closed, or nothing to offer).
+
 ## How scoring works
 
 | Points | Rule |
 |-------:|------|
-| +35 | website is missing |
-| +20 | phone number exists |
+| +35 | every known location of this brand is missing a website |
+| +20 | this specific profile is missing a website |
+| +15 | phone number exists |
 | +15 | rating ≥ 4.0 |
 | +15 | review count ≥ 25 |
-| +15 | category is appointment-, quote-, or menu-based |
-| +10 | Google Maps URL exists |
+| +10 | category confidence is high |
+| +10 | category is appointment-, quote-, or menu-based |
 | +5  | business status is OPERATIONAL |
+| −30 | the brand has a website on another location |
+| −25 | category confidence is low |
+| −25 | likely chain / franchise / corporate branch (3+ locations or known brand) |
 | −50 | CLOSED_PERMANENTLY |
 | −25 | CLOSED_TEMPORARILY |
-| −10 | phone number is missing |
-| −10 | rating < 3.5 with ≥ 10 reviews |
 
 All values are constants at the top of `scripts/score_leads.py` — tweak them
 freely.
 
 ## How the recommended offer is chosen
 
-Up to two suggestions per lead, in priority order:
+Up to two suggestions per lead, driven by website status first:
 
-1. No website → *one-page website with WhatsApp button*
-2. Category flags → *menu/catalog page*, *appointment booking page*,
-   and/or *quote request form*
-3. Weak Google profile (no phone, no Maps link, or under 10 reviews)
-   → *Google Business Profile cleanup*
-4. Has a website and 50+ reviews → *FAQ chatbot*
-5. Nothing matched → the category's `recommended_offer` from the config
+1. `all_locations_missing_website` → *One-page website + WhatsApp button*
+2. `brand_has_website_elsewhere` → *Google Business Profile cleanup: add the
+   correct website link to this branch* (busy branches also get a
+   *branch page on the existing brand website*)
+3. `needs_manual_review` → *verify brand and branches manually before pitching*
+4. Category flags: menu-based → *menu/catalog page or WhatsApp order flow*;
+   quote-based (service/auto/events) → *quote request form*; otherwise
+   appointment-based → *appointment request page*
+5. FAQ chatbot is only suggested for `question_heavy` categories with
+   50+ reviews (enough complexity to be worth automating)
+6. Nothing matched → the category's `recommended_offer` from the config
+
+## Before you contact anyone — please read
+
+- This tool is a **prioritization aid, not a final truth source**. It ranks
+  who is *probably* worth a look; it does not verify anything for you.
+- "Missing website" means missing **from that Google Places profile**. Small
+  businesses often have a site (or an Instagram that works as one) that
+  simply isn't linked on Google. Check before pitching a new website —
+  if the site exists, the real offer is a profile cleanup.
+- **Multi-location businesses (any `cluster_size` > 1, any "Review?" flag)
+  require manual verification before outreach.** Same-name places can be
+  unrelated; branches can be run by different owners; chains have head
+  offices that local branches can't decide for.
+- **Refresh the data before contacting businesses** (re-run the scan).
+  Places close, change phones and add websites all the time; the report
+  shows `scanned_at` per lead so you can see how stale a row is.
 
 ## Compliance notes — please read
 
@@ -169,8 +255,8 @@ Up to two suggestions per lead, in priority order:
   a `generated_at` timestamp and every lead a `scanned_at` timestamp. Re-scan
   before outreach and delete stale snapshots (`data/` and `reports/`) when a
   research round is done.
-- Requests use a **minimal field mask** — only the ten fields the tool needs.
-  The wildcard mask (`*`) is never used.
+- Requests use a **minimal field mask** — only the eleven fields the tool
+  needs. The wildcard mask (`*`) is never used.
 
 ## Cost control
 
@@ -204,9 +290,12 @@ Up to two suggestions per lead, in priority order:
 ## Defaults and decisions made for you
 
 - Sample scan areas point at Santo Domingo, DR — replace with your own.
-- Scan results **merge across runs** (newest scan of a place wins). If the
-  same place matches two categories, the most recent scan decides its
-  category.
+- Scan results **merge across runs** (newest scan of a place wins), and every
+  area/category that ever found a place is kept in `source_areas` /
+  `source_categories`. When a place was found by several categories, scoring
+  uses the one its Google types fit best (`matched_category`).
+- Brand clustering only merges **identical** normalized names — deliberately
+  conservative. Rename lookalikes by hand if you know they're one brand.
 - Raw and scored data live in `data/` (gitignored); polished reports in
   `reports/`. Both are disposable by design.
 - Reports are sorted by score, highest first.
