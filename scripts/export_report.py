@@ -31,6 +31,7 @@ CSV_COLUMNS = [
     "lead_score",
     "lead_type",
     "manual_verification_priority",
+    "sales_priority",
     "name",
     "matched_category",
     "category_confidence",
@@ -143,6 +144,7 @@ HTML_PAGE = Template("""\
   .prio-high { background: #a12318; color: #fff; }
   .prio-medium { background: #b58a00; color: #fff; }
   .prio-low { background: #8c959f; color: #fff; }
+  .prio-skip { background: #e8ebef; color: #57606a; }
   .qlinks { white-space: nowrap; font-size: 12px; }
   .qlinks a { margin-right: 6px; }
   .matches { font-size: 12px; color: #7a5b00; max-width: 220px; }
@@ -158,8 +160,11 @@ HTML_PAGE = Template("""\
 </head>
 <body>
 <h1>Local business leads</h1>
-<p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; $lead_count leads &nbsp;&middot;&nbsp;
-$cluster_count brand clusters &nbsp;&middot;&nbsp; $chain_count possible multi-location brands &nbsp;&middot;&nbsp;
+<p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; <b>$lead_count leads</b> &nbsp;&middot;&nbsp;
+$multi_group_count possible multi-location brand group(s) &nbsp;&middot;&nbsp;
+$review_rows row(s) needing manual review &nbsp;&middot;&nbsp;
+$potential_count potential website lead(s)$verified_weak_html &nbsp;&middot;&nbsp;
+$unique_brand_keys unique brand keys (name-grouping aid &mdash; most cover a single business) &nbsp;&middot;&nbsp;
 short-term research snapshot from the official Google Places API &mdash; re-scan before outreach.</p>
 <p class="legend">
 <b>This is a prioritization aid, not proof.</b> "No website on Google profile" only means
@@ -173,9 +178,16 @@ Only manually verified leads are ever labeled definitively.<br>
 <span class="badge ws-elsewhere">Brand site on another branch</span> fix this profile's link, don't sell a new site &nbsp;&middot;&nbsp;
 <span class="badge ws-review">Needs manual online-presence check</span> uncertain brand grouping, known chain, or a likely name match &nbsp;&middot;&nbsp;
 <span class="badge ws-has">Website on Google profile</span>.<br>
+<b>Verify priority</b> = <i>check this lead first</i>: how urgently a human should confirm the
+business's real online presence (use the quick links, record the result in
+<code>config/manual_checks.yml</code>). &nbsp;
+<b>Sales priority</b> = <i>contact this lead first</i>: it only becomes <b>high</b> after a manual
+check confirms weak/missing presence, so a promising-but-unchecked lead is Verify:&nbsp;high /
+Sales:&nbsp;medium &mdash; it may have strong Instagram, booking or brand presence the API can't see.
+<b>Do not contact high-verify leads until their online presence has been manually checked.</b><br>
 Rows with a yellow tint belong to a possible multi-location brand &mdash; branches are grouped
 under their best-scoring location but every branch is still listed. Verify every
-"Priority: high" row before outreach.
+"Verify: high" row before outreach.
 </p>
 <div class="tablewrap">
 <table>
@@ -184,7 +196,7 @@ under their best-scoring location but every branch is still listed. Verify every
       <th>Score</th><th>Business</th><th>Category</th><th>Conf.</th>
       <th>Brand cluster</th><th>Possible brand matches</th>
       <th>Google profile website</th><th>Online presence</th><th>Lead type</th>
-      <th>Verify priority</th><th>Quick search</th>
+      <th>Verify priority</th><th>Sales priority</th><th>Quick search</th>
       <th>Phone</th><th>Rating</th><th>Maps</th>
       <th>Recommended offer</th><th>Review?</th>
     </tr>
@@ -244,9 +256,8 @@ def presence_cell(lead):
     return f'<span class="badge {css}">{html.escape(label)}</span>'
 
 
-def priority_cell(lead):
-    """Badge for manual_verification_priority."""
-    priority = lead.get("manual_verification_priority", "medium")
+def priority_badge(priority):
+    """Badge for a priority value (verify and sales columns share the look)."""
     return f'<span class="badge prio-{html.escape(priority)}">{html.escape(priority)}</span>'
 
 
@@ -347,7 +358,8 @@ def build_html_row(lead):
         f"      <td>{website_cell(lead)}</td>\n"
         f"      <td>{presence_cell(lead)}</td>\n"
         f'      <td><span class="leadtype">{esc(lead_type)}</span></td>\n'
-        f"      <td>{priority_cell(lead)}</td>\n"
+        f'      <td>{priority_badge(lead.get("manual_verification_priority", "medium"))}</td>\n'
+        f'      <td>{priority_badge(lead.get("sales_priority", "low"))}</td>\n'
         f"      <td>{quick_links_cell(lead)}</td>\n"
         f"      <td>{phone_cell}</td>\n"
         f"      <td>{rating_cell}</td>\n"
@@ -393,20 +405,54 @@ def write_csv(leads, path):
             writer.writerow(row)
 
 
+def count_multi_location_groups(leads):
+    """Distinct possible multi-location brand GROUPS (not strict clusters).
+
+    Strict clusters only merge identical brand keys, so 'Montibello' and
+    'MONTIBELLO Hair Lounge and MedSpa' are two clusters of one row each —
+    counting clusters with 2+ members would report 0 multi-location brands
+    while MULTI_LOCATION_BRAND_REVIEW rows sit in the table. Instead, every
+    lead flagged is_possible_chain (2+ locations, likely name match, or
+    known franchise) is bucketed by its core brand key, which is what links
+    those lookalike rows in the first place.
+    """
+    groups = set()
+    for lead in leads:
+        if not lead.get("is_possible_chain"):
+            continue
+        groups.add(
+            lead.get("core_brand_key")
+            or lead.get("brand_key")
+            or lead.get("cluster_id")
+        )
+    return len(groups)
+
+
 def write_html(leads, path, generated_at):
     display_leads = group_chains_for_display(leads)
-    clusters = {lead.get("cluster_id") for lead in leads if lead.get("cluster_id")}
-    chains = {
-        lead.get("cluster_id")
-        for lead in leads
-        if lead.get("cluster_id") and lead.get("cluster_size", 1) > 1
-    }
+    unique_brand_keys = len({lead.get("brand_key") for lead in leads})
+    review_rows = sum(1 for lead in leads if lead.get("review_needed"))
+    potential = sum(
+        1 for lead in leads if lead.get("lead_type") == "POTENTIAL_WEBSITE_LEAD"
+    )
+    verified_weak = sum(
+        1 for lead in leads if lead.get("online_presence_status") == "weak_or_missing"
+    )
+    # Only shown when a manual check has actually confirmed a weak presence.
+    verified_weak_html = (
+        f" &nbsp;&middot;&nbsp; <b>{verified_weak} verified weak/missing presence lead(s)</b>"
+        if verified_weak
+        else ""
+    )
     rows = "\n".join(build_html_row(lead) for lead in display_leads)
     page = HTML_PAGE.substitute(
         generated_at=html.escape(generated_at),
         lead_count=len(leads),
-        cluster_count=len(clusters),
-        chain_count=len(chains),
+        multi_group_count=count_multi_location_groups(leads),
+        review_rows=review_rows,
+        potential_count=potential,
+        verified_weak_html=verified_weak_html,
+        unique_brand_keys=unique_brand_keys,
         rows=rows,
     )
     with open(path, "w", encoding="utf-8") as handle:
@@ -458,8 +504,10 @@ def main():
                 "Places API — not proof of anything. A missing websiteUri only "
                 "means the Google profile returned no website; the business may "
                 "still have Instagram/booking/directory presence or an unlinked "
-                "site. Manually verify top leads (see manual_verification_priority "
-                "and config/manual_checks.yml) and re-scan before outreach."
+                "site. manual_verification_priority = check this lead first; "
+                "sales_priority = contact this lead first (never high until a "
+                "manual check in config/manual_checks.yml confirms weak/missing "
+                "presence). Re-scan before outreach."
             ),
             "lead_count": len(leads),
             "leads": leads,

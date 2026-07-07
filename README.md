@@ -199,9 +199,11 @@ simply isn't linked on Google. So the tool tracks two separate things:
    the format; the `id` for each lead is in `reports/leads.csv`).
 4. Re-run `py scripts/score_leads.py` and `py scripts/export_report.py`.
 
-Only after step 3 can a lead become a `NEW_WEBSITE_LEAD` (+25 score).
-Verified social/booking/directory presence scores the lead down (−15) so
-your list keeps getting cleaner as you work through it.
+Only after step 3 can a lead become a `NEW_WEBSITE_LEAD` (+25 score) with
+`sales_priority: high`. Verified social/booking/directory presence scores
+the lead down (−15) so your list keeps getting cleaner as you work through
+it. **Verify first, contact second** — the "Sales priority" column stays at
+medium or below until you've done step 3 for that lead.
 
 ## Lead types
 
@@ -249,10 +251,42 @@ manual verification can prove weak online presence:
 The −25 chain and −20 possible-multi penalties don't stack. All values are
 constants at the top of `scripts/score_leads.py` — tweak them freely.
 
-Every lead also gets a `manual_verification_priority` (high / medium / low):
-**high** = promising unverified lead, check these first; **medium** = worth
-checking but murkier; **low** = verified already, has a site, or not worth
-the time.
+## Verify priority vs. sales priority — two different questions
+
+Every lead gets **two** separate priorities, and mixing them up is how you
+end up pitching a website to a business with 40k Instagram followers:
+
+- `manual_verification_priority` (high / medium / low) — **"check this lead
+  first."** How urgently a human should confirm the business's real online
+  presence. **high** = promising unverified lead, check these first;
+  **medium** = worth checking but murkier; **low** = verified already, has a
+  site, or not worth the time.
+- `sales_priority` (high / medium / low / skip) — **"contact this lead
+  first."** How urgently the lead is worth outreach *given what has actually
+  been verified*.
+
+**Do not contact high-verification leads until their online presence has
+been manually checked.** A lead can be high verification priority and only
+medium (or low) sales priority at the same time — that combination means
+"great on paper, but it may have strong Instagram, booking, or brand
+presence the Places API can't see; check it before you call."
+
+How `sales_priority` is assigned:
+
+| Rule | Result |
+|---|---|
+| `lead_type` is `BAD_CATEGORY_MATCH` | **skip** |
+| `lead_type` is `NEEDS_MANUAL_REVIEW` or `MULTI_LOCATION_BRAND_REVIEW` | **low** until verified |
+| `online_presence_status` is `weak_or_missing` (manually verified) | **high** — the only path to high |
+| `POTENTIAL_WEBSITE_LEAD` with verification priority high | **medium** until manually checked |
+| `POTENTIAL_WEBSITE_LEAD`, anything else | **low** |
+| Optimization leads (GBP cleanup, branch/menu/quote/appointment page, chatbot) | **medium** |
+| `online_presence_status` is `unknown_not_checked` | never **high**, whatever else is true |
+
+The verification workflow is what moves leads: check a `Verify: high` row by
+hand, record the result in `config/manual_checks.yml`, re-run score + export
+— a confirmed gap jumps to `Sales: high` (`NEW_WEBSITE_LEAD`), a business
+that turned out to have presence drops to low.
 
 ## How the recommended offer is chosen
 

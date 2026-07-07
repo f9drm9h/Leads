@@ -19,6 +19,10 @@ What happens to each lead:
   5. Category confidence checks the Google place types (and name keywords)
      against the category that found the lead, and names that look like a
      plaza/mall/building are flagged as bad category matches.
+  6. Two separate priorities are attached: manual_verification_priority
+     ("check this lead first") and sales_priority ("contact this lead
+     first"). Sales priority is never high while the online presence is
+     still unverified.
 
 Usage:
     py scripts/score_leads.py
@@ -548,6 +552,43 @@ def pick_verification_priority(lead):
     return "medium"
 
 
+def pick_sales_priority(lead):
+    """How urgently should you CONTACT this lead? (not the same question!)
+
+    Verification priority answers "check this lead first"; sales priority
+    answers "contact this lead first". A promising-but-unchecked lead is
+    HIGH verification priority yet only MEDIUM sales priority, because it
+    may have strong Instagram/booking/brand presence the Places API can't
+    see. Only a manual weak_or_missing verification unlocks "high".
+
+    high   = verified weak/missing online presence — the pitch is solid
+    medium = good target on paper but presence unconfirmed, or a concrete
+             optimization offer (profile cleanup, menu/booking page, ...)
+    low    = unresolved identity/brand questions, or verified presence
+             that makes the pitch weak
+    skip   = probably not a real business in this category
+    """
+    lead_type = lead["lead_type"]
+
+    if lead_type == LEAD_BAD_CATEGORY:
+        return "skip"
+    if lead_type in (LEAD_MANUAL_REVIEW, LEAD_MULTI_LOCATION):
+        return "low"  # who/what this business is must be verified first
+    if lead_type == LEAD_LOW_PRIORITY:
+        return "low"
+    if lead["online_presence_status"] == PRESENCE_WEAK:
+        return "high"  # the ONLY path to high: hand-verified weak presence
+    if lead_type == LEAD_POTENTIAL_WEBSITE:
+        # Missing websiteUri, presence unknown or verified-but-present.
+        # Never high: unknown_not_checked must be checked before contact.
+        if lead["manual_verification_priority"] == "high":
+            return "medium"  # becomes high or low once manually checked
+        return "low"
+    # Remaining types are optimization offers on businesses that verifiably
+    # exist (GBP cleanup, branch/menu/quote/appointment page, chatbot).
+    return "medium"
+
+
 def build_recommended_offer(lead, category):
     """Pick up to MAX_OFFERS_PER_LEAD service suggestions for this lead.
 
@@ -666,6 +707,7 @@ def main():
         lead["lead_type"] = pick_lead_type(lead, category)
         lead["lead_score"] = score_lead(lead, category)
         lead["manual_verification_priority"] = pick_verification_priority(lead)
+        lead["sales_priority"] = pick_sales_priority(lead)
         lead["recommended_offer"] = build_recommended_offer(lead, category)
         lead["review_needed"] = (
             lead["needs_manual_review"]
@@ -691,7 +733,10 @@ def main():
     print(f"  manually verified so far: {verified} (config/manual_checks.yml)")
     for priority in ("high", "medium", "low"):
         count = sum(1 for lead in leads if lead["manual_verification_priority"] == priority)
-        print(f"  verification priority {priority}: {count}")
+        print(f"  verification priority {priority} (check first): {count}")
+    for priority in ("high", "medium", "low", "skip"):
+        count = sum(1 for lead in leads if lead["sales_priority"] == priority)
+        print(f"  sales priority {priority} (contact first): {count}")
     print()
     print(f"Top {min(args.top, len(leads))} leads:")
     print(f"  {'SCORE':>5}  {'BUSINESS':<32} {'CATEGORY':<14} {'CONF':<6} {'PRESENCE':<22} LEAD TYPE")
