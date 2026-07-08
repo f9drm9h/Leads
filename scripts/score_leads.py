@@ -126,6 +126,21 @@ LOCATION_NAME_KEYWORDS = [
     "square",
 ]
 
+# Banks, arenas, government offices and other institutional places are not
+# side-hustle sales targets: even when their profile data is poor, the
+# decision maker is a head office or the state, not a walk-in owner.
+# Both lists are matched locally only — nothing is probed or scraped.
+INSTITUTIONAL_PLACE_TYPES = {
+    "bank", "atm", "stadium", "arena", "sports_complex", "shopping_mall",
+    "city_hall", "courthouse", "embassy", "local_government_office",
+    "government_office", "police", "fire_station", "post_office",
+}
+INSTITUTIONAL_NAME_KEYWORDS = [
+    "banco", "bank", "arena", "estadio", "stadium", "coliseo",
+    "ministerio", "ayuntamiento", "alcaldia", "gobierno",
+    "embajada", "consulado",
+]
+
 # If a brand key contains any of these, treat it as a known chain/franchise:
 # the parent company almost certainly has a website even if no scanned
 # profile lists one, so "no website found" is never trusted automatically.
@@ -552,6 +567,19 @@ def pick_verification_priority(lead):
     return "medium"
 
 
+def is_institutional_place(lead):
+    """Bank / arena / government office / mall / plaza / commercial building?
+
+    Detected from the Google place types plus whole-word name keywords
+    (accent-insensitive). Verify priority is untouched by this — a chain or
+    institution can still be worth checking for data quality.
+    """
+    if lead_place_types(lead) & INSTITUTIONAL_PLACE_TYPES:
+        return True
+    keywords = INSTITUTIONAL_NAME_KEYWORDS + LOCATION_NAME_KEYWORDS
+    return name_keyword_hit(lead.get("name", ""), keywords) is not None
+
+
 def pick_sales_priority(lead):
     """How urgently should you CONTACT this lead? (not the same question!)
 
@@ -564,9 +592,11 @@ def pick_sales_priority(lead):
     high   = verified weak/missing online presence — the pitch is solid
     medium = good target on paper but presence unconfirmed, or a concrete
              optimization offer (profile cleanup, menu/booking page, ...)
-    low    = unresolved identity/brand questions, or verified presence
-             that makes the pitch weak
-    skip   = probably not a real business in this category
+    low    = unresolved identity/brand questions, verified presence that
+             makes the pitch weak, chains/franchises with a website, or
+             institutional places that scored high category confidence
+    skip   = probably not a real business in this category, or a bank/
+             arena/government/mall-type place — not a side-hustle target
     """
     lead_type = lead["lead_type"]
 
@@ -578,6 +608,16 @@ def pick_sales_priority(lead):
         return "low"
     if lead["online_presence_status"] == PRESENCE_WEAK:
         return "high"  # the ONLY path to high: hand-verified weak presence
+    if is_institutional_place(lead):
+        # Banks, arenas, government places, malls/plazas, commercial
+        # buildings. High category confidence may mean a real business
+        # operating inside one, so those stay visible at low instead.
+        return "low" if lead["category_confidence"] == "high" else "skip"
+    if lead["is_likely_chain"]:
+        # Known chain/franchise that already has a website (chains without
+        # one became MULTI_LOCATION_BRAND_REVIEW above). Website work for a
+        # franchise is decided at head office — not a first-contact sale.
+        return "low"
     if lead_type == LEAD_POTENTIAL_WEBSITE:
         # Missing websiteUri, presence unknown or verified-but-present.
         # Never high: unknown_not_checked must be checked before contact.

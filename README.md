@@ -278,15 +278,29 @@ How `sales_priority` is assigned:
 | `lead_type` is `BAD_CATEGORY_MATCH` | **skip** |
 | `lead_type` is `NEEDS_MANUAL_REVIEW` or `MULTI_LOCATION_BRAND_REVIEW` | **low** until verified |
 | `online_presence_status` is `weak_or_missing` (manually verified) | **high** — the only path to high |
+| Bank, arena, government/institutional place, mall, plaza, commercial building | **low** if category confidence is high, otherwise **skip** |
+| Known chain/franchise that already has a website | **low** — head office decides, not the branch |
 | `POTENTIAL_WEBSITE_LEAD` with verification priority high | **medium** until manually checked |
 | `POTENTIAL_WEBSITE_LEAD`, anything else | **low** |
 | Optimization leads (GBP cleanup, branch/menu/quote/appointment page, chatbot) | **medium** |
 | `online_presence_status` is `unknown_not_checked` | never **high**, whatever else is true |
 
+**For this side hustle, small local businesses are the main target.** Known
+chains, franchises, banks, arenas, malls and other institutional brands are
+usually low-priority or skip unless manually selected — a McDonald's branch
+or a bank does not buy a one-page website from you, its head office decides
+that. Verify priority stays separate on purpose: a chain can still be worth
+*checking* for data quality, it just should not be a first-contact sales
+lead. (Detection is local-only: Google place types plus whole-word name
+keywords like banco/arena/estadio/plaza — the lists are constants at the
+top of `scripts/score_leads.py`.)
+
 The verification workflow is what moves leads: check a `Verify: high` row by
 hand, record the result in `config/manual_checks.yml`, re-run score + export
 — a confirmed gap jumps to `Sales: high` (`NEW_WEBSITE_LEAD`), a business
-that turned out to have presence drops to low.
+that turned out to have presence drops to low. Manually verifying a chain or
+institutional place as `weak_or_missing` overrides the demotion — that is
+how you deliberately pull one into the sales list.
 
 ## How the recommended offer is chosen
 
