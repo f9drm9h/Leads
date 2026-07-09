@@ -152,6 +152,41 @@ Repeated scans **merge**: results are deduplicated by Google place id, and a
 re-scan refreshes the stored data for the places it finds (this is how you
 refresh data before an outreach round). Use `--fresh` to wipe and start over.
 
+## Open the report on your phone (GitHub Pages)
+
+The repository doubles as a small static site so you can read the reports
+from anywhere:
+
+- `index.html` — landing page with two big buttons
+- `reports/leads_mobile.html` — phone-friendly cards
+- `reports/leads.html` — full desktop table
+
+**Open it locally:** double-click `reports/leads.html` (or
+`reports/leads_mobile.html`) — they are plain HTML files and open in any
+browser without a server.
+
+**Enable GitHub Pages** (one-time, already done for this repo):
+
+1. On GitHub, open the repository → **Settings** → **Pages**.
+2. Under **Build and deployment**, set **Source** to *Deploy from a branch*,
+   pick the `main` branch and the `/ (root)` folder, then **Save**.
+3. Wait a minute for the first build, then open
+   `https://<your-username>.github.io/<repo>/`.
+
+**Open it from an iPhone:** open the Pages URL in Safari, tap
+**Open Mobile Report**, then use Share → **Add to Home Screen** to keep it
+one tap away. Business names open the Google Maps profile straight into the
+Maps app.
+
+**Privacy warning:** GitHub Pages sites are **public** even on a private
+repository — anyone with the URL can read the published lead report. Only
+commit reports you are comfortable exposing, and never commit `.env`, API
+keys or other credentials (the `.gitignore` blocks the usual suspects).
+
+**Keep it fresh:** the published report is a snapshot. Before an outreach
+round, re-run scan → score → export, then commit and push the regenerated
+`reports/*.html` so the site shows current data.
+
 ## Brand clusters — how branches are handled
 
 Businesses are grouped by a normalized **brand key**: the name is lowercased,
@@ -409,6 +444,7 @@ manually verified the lead:
 ```
 local-business-leads/
 ├── README.md
+├── index.html            # GitHub Pages landing page (links to both reports)
 ├── .env.example          # template for your API key (copy to .env)
 ├── requirements.txt
 ├── config/

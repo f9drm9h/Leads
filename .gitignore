@@ -1,12 +1,17 @@
 # Secrets — never commit the real API key
 .env
+*.env
+!.env.example
 
 # Python
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
+venv/
 
-# Short-term research data (regenerate with the scripts, don't version it)
+# Short-term research data (regenerate with the scripts, don't version it).
+# The two HTML reports ARE committed so GitHub Pages can serve them.
 data/
 reports/*.csv
 reports/*.json
-reports/*.html
