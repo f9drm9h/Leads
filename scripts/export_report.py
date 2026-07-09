@@ -1,4 +1,5 @@
-"""Export scored leads to reports/leads.csv, leads.json and leads.html.
+"""Export scored leads to reports/leads.csv, leads.json, leads.html and
+leads_mobile.html (a phone-friendly card version of the same data).
 
 Reads  data/leads_scored.json  (produced by score_leads.py)
 
@@ -156,6 +157,8 @@ HTML_PAGE = Template("""\
   .addr { color: #57606a; font-size: 12px; }
   .notes { color: #8a6d1a; font-size: 12px; font-style: italic; max-width: 340px; }
   .muted { color: #8c959f; }
+  .business-link { color: #0969da; font-weight: 700; text-decoration: none; }
+  .business-link:hover, .business-link:focus { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -211,6 +214,79 @@ $rows
 """)
 
 
+MOBILE_PAGE = Template("""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local business leads (mobile)</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+         margin: 12px; color: #1c2733; background: #f6f8fa; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .meta { color: #57606a; margin: 0 0 8px; font-size: 12px; }
+  .legend { color: #57606a; font-size: 12px; margin: 0 0 14px; line-height: 1.6; }
+  .legend b { color: #1c2733; }
+  .card { background: #fff; border-radius: 10px; padding: 12px;
+          margin: 0 0 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .card.chain { background: #fbf6ea; border-left: 4px solid #b58a00; }
+  .cardtop { display: flex; align-items: baseline; gap: 8px; }
+  .cardname { font-size: 15px; font-weight: 700; }
+  .business-link { color: #0969da; font-weight: 700; text-decoration: none; }
+  .business-link:hover, .business-link:focus { text-decoration: underline; }
+  .score { display: inline-block; min-width: 34px; text-align: center;
+           padding: 2px 8px; border-radius: 12px; font-weight: 600;
+           color: #fff; flex-shrink: 0; }
+  .score-high { background: #1a7f37; }
+  .score-mid  { background: #b58a00; }
+  .score-low  { background: #8c959f; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 10px;
+           font-size: 11px; font-weight: 600; white-space: nowrap; }
+  .ws-missing { background: #ffe5e0; color: #a12318; }
+  .ws-elsewhere { background: #fff2cc; color: #7a5b00; }
+  .ws-review { background: #ece3fa; color: #5a2ca0; }
+  .ws-has { background: #dcf2e2; color: #14602a; }
+  .op-unknown { background: #e8ebef; color: #57606a; }
+  .op-weak { background: #ffe5e0; color: #a12318; }
+  .op-has { background: #dcf2e2; color: #14602a; }
+  .op-review { background: #ece3fa; color: #5a2ca0; }
+  .prio-high { background: #a12318; color: #fff; }
+  .prio-medium { background: #b58a00; color: #fff; }
+  .prio-low { background: #8c959f; color: #fff; }
+  .prio-skip { background: #e8ebef; color: #57606a; }
+  .review-yes { color: #a12318; font-weight: 700; font-size: 11px; }
+  .chainbadge { color: #7a5b00; font-weight: 600; font-size: 11px; }
+  .addr { color: #57606a; font-size: 12px; margin-top: 2px; }
+  .notes { color: #8a6d1a; font-size: 12px; font-style: italic; margin-top: 2px; }
+  .badges { margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .row2 { font-size: 12px; color: #354150; margin-top: 6px; }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .btn { display: inline-block; padding: 7px 14px; border-radius: 8px;
+         background: #eef2f6; color: #1c2733; font-size: 13px; font-weight: 600;
+         text-decoration: none; }
+  .btn-maps { background: #0969da; color: #fff; }
+  .closed { color: #a12318; font-size: 12px; font-weight: 600; margin-top: 2px; }
+  .missing { color: #c0392b; font-weight: 600; }
+  .muted { color: #8c959f; }
+</style>
+</head>
+<body>
+<h1>Local business leads</h1>
+<p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; <b>$lead_count leads</b></p>
+<p class="legend">
+<b>This is a prioritization aid, not proof.</b> Tap a business name to open its
+Google Maps profile. Use the search buttons to verify a lead by hand, record what
+you find in <code>config/manual_checks.yml</code>, then re-run the score + export
+steps. <b>Do not contact "Verify: high" leads until their online presence has been
+manually checked.</b> The full column view lives in <code>leads.html</code>.
+</p>
+$cards
+</body>
+</html>
+""")
+
+
 def score_css_class(score):
     """Color bucket for the score badge in the HTML report."""
     if score >= 70:
@@ -220,9 +296,21 @@ def score_css_class(score):
     return "score-low"
 
 
-def website_cell(lead):
-    """Status badge (+ the most useful link we have) for the website column."""
+def business_name_html(lead):
+    """Business name linked to its Google Maps profile (plain text if none)."""
     esc = html.escape
+    name = esc(lead.get("name", ""))
+    maps_url = lead.get("google_maps_url") or ""
+    if not maps_url:
+        return name
+    return (
+        f'<a href="{esc(maps_url, quote=True)}" target="_blank" '
+        f'rel="noopener noreferrer" class="business-link">{name}</a>'
+    )
+
+
+def website_status_badge(lead):
+    """Website-status badge (the mobile card uses it without the site link)."""
     status = lead.get("website_status", "")
     label = WEBSITE_STATUS_LABELS.get(status, status or "?")
     css = {
@@ -231,7 +319,13 @@ def website_cell(lead):
         "all_locations_missing_website": "ws-missing",
         "needs_manual_review": "ws-review",
     }.get(status, "ws-review")
-    parts = [f'<span class="badge {css}">{esc(label)}</span>']
+    return f'<span class="badge {css}">{html.escape(label)}</span>'
+
+
+def website_cell(lead):
+    """Status badge (+ the most useful link we have) for the website column."""
+    esc = html.escape
+    parts = [website_status_badge(lead)]
 
     link = lead.get("website") or lead.get("brand_website_example") or ""
     if link:
@@ -256,9 +350,12 @@ def presence_cell(lead):
     return f'<span class="badge {css}">{html.escape(label)}</span>'
 
 
-def priority_badge(priority):
+def priority_badge(priority, label=""):
     """Badge for a priority value (verify and sales columns share the look)."""
-    return f'<span class="badge prio-{html.escape(priority)}">{html.escape(priority)}</span>'
+    return (
+        f'<span class="badge prio-{html.escape(priority)}">'
+        f"{html.escape(label + priority)}</span>"
+    )
 
 
 def matches_cell(lead):
@@ -276,21 +373,30 @@ def city_from_address(address):
     return parts[-2] if len(parts) >= 2 else ""
 
 
-def quick_links_cell(lead):
-    """Manual-verification search links (no scraping — just search URLs)."""
+def quick_search_queries(lead):
+    """Manual-verification search queries (no scraping — just search URLs)."""
     name = lead.get("name", "")
     if not name:
-        return '<span class="muted">&mdash;</span>'
+        return {}
     city = city_from_address(lead.get("address", ""))
-    google_q = quote_plus(f'"{name}" {city}'.strip())
-    instagram_q = quote_plus(f'"{name}" site:instagram.com')
-    facebook_q = quote_plus(f'"{name}" site:facebook.com')
+    return {
+        "google": quote_plus(f'"{name}" {city}'.strip()),
+        "instagram": quote_plus(f'"{name}" site:instagram.com'),
+        "facebook": quote_plus(f'"{name}" site:facebook.com'),
+    }
+
+
+def quick_links_cell(lead):
+    """Manual-verification search links (no scraping — just search URLs)."""
+    queries = quick_search_queries(lead)
+    if not queries:
+        return '<span class="muted">&mdash;</span>'
     esc = html.escape
     return (
         '<span class="qlinks">'
-        f'<a href="https://www.google.com/search?q={esc(google_q, quote=True)}" target="_blank">Google</a>'
-        f'<a href="https://www.google.com/search?q={esc(instagram_q, quote=True)}" target="_blank">IG</a>'
-        f'<a href="https://www.google.com/search?q={esc(facebook_q, quote=True)}" target="_blank">FB</a>'
+        f'<a href="https://www.google.com/search?q={esc(queries["google"], quote=True)}" target="_blank">Google</a>'
+        f'<a href="https://www.google.com/search?q={esc(queries["instagram"], quote=True)}" target="_blank">IG</a>'
+        f'<a href="https://www.google.com/search?q={esc(queries["facebook"], quote=True)}" target="_blank">FB</a>'
         "</span>"
     )
 
@@ -349,7 +455,7 @@ def build_html_row(lead):
     return (
         f"    <tr{row_class}>\n"
         f'      <td><span class="score {score_css_class(score)}">{score}</span></td>\n'
-        f'      <td>{esc(lead.get("name", ""))}{closed_html}'
+        f"      <td>{business_name_html(lead)}{closed_html}"
         f'<div class="addr">{esc(lead.get("address", ""))}</div>{notes_html}</td>\n'
         f'      <td>{esc(lead.get("matched_category") or lead.get("source_category", ""))}</td>\n'
         f'      <td><span class="badge conf-{esc(confidence)}">{esc(confidence)}</span></td>\n'
@@ -367,6 +473,89 @@ def build_html_row(lead):
         f'      <td>{esc(lead.get("recommended_offer", ""))}</td>\n'
         f"      <td>{review_cell}</td>\n"
         "    </tr>"
+    )
+
+
+def build_mobile_card(lead):
+    """Render one lead as a phone-friendly card (all values escaped)."""
+    esc = html.escape
+
+    score = lead.get("lead_score", 0)
+    name_html = business_name_html(lead)
+
+    business_status = lead.get("business_status", "")
+    closed_html = ""
+    if business_status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
+        closed_html = (
+            f'<div class="closed">{esc(business_status.replace("_", " ").title())}</div>'
+        )
+
+    notes = lead.get("notes", "")
+    notes_html = f'<div class="notes">{esc(notes)}</div>' if notes else ""
+
+    badges = [
+        website_status_badge(lead),
+        presence_cell(lead),
+        priority_badge(lead.get("manual_verification_priority", "medium"), "Verify: "),
+        priority_badge(lead.get("sales_priority", "low"), "Sales: "),
+    ]
+    if lead.get("review_needed"):
+        badges.append('<span class="review-yes">REVIEW</span>')
+    if lead.get("cluster_size", 1) > 1 or lead.get("is_possible_chain"):
+        size = lead.get("cluster_size", 1)
+        badges.append(f'<span class="chainbadge">&#9939; {size} location(s)</span>')
+
+    rating = lead.get("rating")
+    if rating is None:
+        rating_text = "no ratings"
+    else:
+        rating_text = f"{rating:.1f} &#9733; ({lead.get('review_count') or 0})"
+    phone = esc(lead.get("phone", ""))
+    phone_html = phone if phone else '<span class="missing">no phone</span>'
+    category = esc(lead.get("matched_category") or lead.get("source_category", ""))
+    lead_type = esc(str(lead.get("lead_type", "")).replace("_", " "))
+    row2 = (
+        f"{category} &nbsp;&middot;&nbsp; {lead_type} &nbsp;&middot;&nbsp; "
+        f"{phone_html} &nbsp;&middot;&nbsp; {rating_text}"
+    )
+
+    buttons = []
+    queries = quick_search_queries(lead)
+    if queries:
+        buttons.append(
+            f'<a class="btn" href="https://www.google.com/search?q='
+            f'{esc(queries["google"], quote=True)}" target="_blank">Google</a>'
+        )
+        buttons.append(
+            f'<a class="btn" href="https://www.google.com/search?q='
+            f'{esc(queries["instagram"], quote=True)}" target="_blank">Instagram</a>'
+        )
+        buttons.append(
+            f'<a class="btn" href="https://www.google.com/search?q='
+            f'{esc(queries["facebook"], quote=True)}" target="_blank">Facebook</a>'
+        )
+    maps_url = lead.get("google_maps_url") or ""
+    if maps_url:
+        buttons.append(
+            f'<a class="btn btn-maps" href="{esc(maps_url, quote=True)}" '
+            f'target="_blank" rel="noopener noreferrer">Maps</a>'
+        )
+    buttons_html = (
+        f'  <div class="btnrow">{"".join(buttons)}</div>\n' if buttons else ""
+    )
+
+    card_class = "card chain" if lead.get("cluster_size", 1) > 1 else "card"
+    return (
+        f'<div class="{card_class}">\n'
+        f'  <div class="cardtop"><span class="score {score_css_class(score)}">'
+        f'{score}</span><span class="cardname">{name_html}</span></div>\n'
+        f"{closed_html}"
+        f'  <div class="addr">{esc(lead.get("address", ""))}</div>\n'
+        f"{notes_html}"
+        f'  <div class="badges">{"".join(badges)}</div>\n'
+        f'  <div class="row2">{row2}</div>\n'
+        f"{buttons_html}"
+        "</div>"
     )
 
 
@@ -459,6 +648,18 @@ def write_html(leads, path, generated_at):
         handle.write(page)
 
 
+def write_mobile_html(leads, path, generated_at):
+    display_leads = group_chains_for_display(leads)
+    cards = "\n".join(build_mobile_card(lead) for lead in display_leads)
+    page = MOBILE_PAGE.substitute(
+        generated_at=html.escape(generated_at),
+        lead_count=len(leads),
+        cards=cards,
+    )
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(page)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Export scored leads to CSV, JSON and a static HTML report."
@@ -493,6 +694,7 @@ def main():
     csv_path = REPORTS_DIR / "leads.csv"
     json_path = REPORTS_DIR / "leads.json"
     html_path = REPORTS_DIR / "leads.html"
+    mobile_path = REPORTS_DIR / "leads_mobile.html"
 
     write_csv(leads, csv_path)
     save_json(
@@ -514,11 +716,13 @@ def main():
         },
     )
     write_html(leads, html_path, generated_at)
+    write_mobile_html(leads, mobile_path, generated_at)
 
     print(f"Exported {len(leads)} leads (generated {generated_at}):")
     print(f"  {csv_path}")
     print(f"  {json_path}")
     print(f"  {html_path}   <- open this one in your browser")
+    print(f"  {mobile_path}   <- phone-friendly card version")
 
 
 if __name__ == "__main__":

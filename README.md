@@ -25,7 +25,8 @@ config/scan_areas.yml   config/categories.yml   config/manual_checks.yml
    scripts/score_leads.py     ->  data/leads_scored.json   (+ brand clusters + website
                                                             status + online presence +
                                                             confidence + score)
-   scripts/export_report.py   ->  reports/leads.csv / leads.json / leads.html
+   scripts/export_report.py   ->  reports/leads.csv / leads.json / leads.html /
+                                  leads_mobile.html (phone-friendly cards)
 ```
 
 **This is a lead prioritization tool, not proof that a business lacks online
@@ -139,11 +140,13 @@ py scripts/scan_places.py --area default                # all categories, one ar
 py scripts/scan_places.py --all                         # every area x category
 py scripts/scan_places.py --all --fresh                 # discard old data first
 py scripts/score_leads.py                               # rank the leads
-py scripts/export_report.py                             # write the 3 reports
+py scripts/export_report.py                             # write the reports
 py scripts/export_report.py --min-score 50              # only stronger leads
 ```
 
-Then open `reports/leads.html` in your browser.
+Then open `reports/leads.html` in your browser (`reports/leads_mobile.html`
+is the same data as phone-friendly cards). In both reports, clicking a
+business name opens its Google Maps profile in a new tab.
 
 Repeated scans **merge**: results are deduplicated by Google place id, and a
 re-scan refreshes the stored data for the places it finds (this is how you
@@ -418,5 +421,5 @@ local-business-leads/
 │   ├── score_leads.py    # step 2: score + recommend an offer
 │   └── export_report.py  # step 3: write CSV / JSON / HTML reports
 ├── data/                 # created by the scripts (short-term working data)
-└── reports/              # leads.csv, leads.json, leads.html (generated)
+└── reports/              # leads.csv/.json/.html + leads_mobile.html (generated)
 ```
