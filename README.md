@@ -147,7 +147,7 @@ py scripts/scan_places.py --area default                # all categories, one ar
 py scripts/scan_places.py --area-prefix sde             # every sde-* area
 py scripts/scan_places.py --matrix                      # targeted SDE scan matrix
 py scripts/scan_places.py --matrix --dry-run            # preview, zero API calls
-py scripts/scan_places.py --matrix --max-requests 40    # hard request cap
+py scripts/scan_places.py --matrix --max-requests 61    # hard request cap
 py scripts/scan_places.py --matrix --matrix-categories nightlife,fitness
                                                         # only those matrix pairs
 py scripts/scan_places.py --all                         # every area x category

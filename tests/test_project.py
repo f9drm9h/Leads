@@ -6,11 +6,13 @@ Run them from the project root with:
     py -m unittest discover -s tests -v
 """
 
+import re
 import sys
 import unittest
 from pathlib import Path
 
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent / "scripts"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS_DIR))
 
 import common  # noqa: E402
@@ -318,6 +320,69 @@ class PublicPrivateSeparationTests(unittest.TestCase):
         )
         self.assertIn("SENTINEL OFFER pitch text", rendered)
         self.assertIn("sentinel-sales-priority", rendered)
+
+
+class BatchRunnerTests(unittest.TestCase):
+    """The one-click .bat runners must never silently truncate the matrix.
+
+    scan_places.py --max-requests N runs only the FIRST N pairs, so a cap
+    below the configured pair count would skip combinations without any
+    error. These tests fail as soon as a runner falls out of sync with
+    config/scan_matrix.yml.
+    """
+
+    def setUp(self):
+        areas = common.load_scan_areas()
+        categories = common.load_categories()
+        self.pairs = common.load_scan_matrix(areas, categories)
+        self.expansion_pairs = [
+            (area, cat)
+            for area, cat in self.pairs
+            if cat["label"] in EXPANSION_CATEGORY_LABELS
+        ]
+
+    @staticmethod
+    def read_caps(bat_name):
+        content = (PROJECT_ROOT / bat_name).read_text(encoding="utf-8")
+        caps = [int(n) for n in re.findall(r"--max-requests\s+(\d+)", content)]
+        checks = [
+            int(n)
+            for n in re.findall(r"Total requests that would be made: (\d+)", content)
+        ]
+        return content, caps, checks
+
+    def test_full_runner_covers_every_matrix_pair(self):
+        content, caps, checks = self.read_caps("run_scan.bat")
+        total = len(self.pairs)
+        self.assertTrue(caps, "run_scan.bat has no --max-requests cap")
+        for cap in caps:
+            self.assertGreaterEqual(
+                cap, total,
+                f"run_scan.bat caps at {cap} but the matrix has {total} pairs "
+                "— the runner would silently skip combinations",
+            )
+        # The dry-run validation line must expect the real matrix size too.
+        for expected in checks:
+            self.assertEqual(expected, total)
+        self.assertIn("--dry-run", content)
+
+    def test_expansion_runner_matches_the_expansion_pairs(self):
+        content, caps, checks = self.read_caps("run_service_expansion_scan.bat")
+        total = len(self.expansion_pairs)
+        self.assertTrue(caps)
+        for cap in caps:
+            self.assertGreaterEqual(cap, total)
+        for expected in checks:
+            self.assertEqual(expected, total)
+        # It must scan exactly the expansion categories, no more, no less.
+        match = re.search(r"--matrix-categories\s+(\S+)", content)
+        self.assertIsNotNone(match)
+        listed = set(match.group(1).replace("%CATS%", "").split(",")) - {""}
+        if not listed:  # categories live in a CATS variable
+            var = re.search(r"set CATS=(\S+)", content)
+            self.assertIsNotNone(var)
+            listed = set(var.group(1).split(","))
+        self.assertEqual(listed, EXPANSION_CATEGORY_LABELS)
 
 
 class FilterWidgetTests(unittest.TestCase):
