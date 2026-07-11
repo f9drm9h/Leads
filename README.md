@@ -19,14 +19,18 @@ outreach → re-scan next time for fresh data.
 ## How it works
 
 ```
-config/scan_areas.yml   config/categories.yml   config/manual_checks.yml
-        \                   |                     (your hand-verified results)
+config/scan_areas.yml   config/categories.yml   config/manual_checks.yml (+ .local)
+config/scan_matrix.yml      |                     (your hand-verified results)
+        \                   |
    scripts/scan_places.py     ->  data/scan_results.json   (raw, deduplicated by place id)
    scripts/score_leads.py     ->  data/leads_scored.json   (+ brand clusters + website
                                                             status + online presence +
                                                             confidence + score)
-   scripts/export_report.py   ->  reports/leads.csv / leads.json / leads.html /
-                                  leads_mobile.html (phone-friendly cards)
+   scripts/export_report.py   ->  PUBLIC:  reports/leads.html + leads_mobile.html
+                                           (neutral directory, committed / Pages)
+                                  PRIVATE: private/leads.csv / leads.json /
+                                           leads.html / leads_mobile.html
+                                           (full research view, gitignored)
 ```
 
 **This is a lead prioritization tool, not proof that a business lacks online
@@ -137,16 +141,60 @@ Low-confidence leads are never deleted — they are scored down and marked
 py scripts/scan_places.py --list                        # show configured labels
 py scripts/scan_places.py --area default --category salons
 py scripts/scan_places.py --area default                # all categories, one area
+py scripts/scan_places.py --area-prefix sde             # every sde-* area
+py scripts/scan_places.py --matrix                      # targeted SDE scan matrix
+py scripts/scan_places.py --matrix --dry-run            # preview, zero API calls
+py scripts/scan_places.py --matrix --max-requests 40    # hard request cap
 py scripts/scan_places.py --all                         # every area x category
 py scripts/scan_places.py --all --fresh                 # discard old data first
 py scripts/score_leads.py                               # rank the leads
 py scripts/export_report.py                             # write the reports
-py scripts/export_report.py --min-score 50              # only stronger leads
+py scripts/export_report.py --min-score 50              # private view: stronger leads only
 ```
 
-Then open `reports/leads.html` in your browser (`reports/leads_mobile.html`
-is the same data as phone-friendly cards). In both reports, clicking a
-business name opens its Google Maps profile in a new tab.
+Every run first prints the exact FieldMask, the billing SKU it triggers and
+the planned request count. `--dry-run` shows the full request list without
+calling the API (no key needed); `--max-requests N` stops before making more
+than N requests; each real run is logged to `data/request_log.json` so you
+can always check how many requests you made this month.
+
+Then open **`private/leads.html`** in your browser (`private/leads_mobile.html`
+is the same data as phone-friendly cards) — that is the research view with
+scores and priorities. The files in `reports/` are the *public* directory
+pages. In all reports, clicking a business name opens its Google Maps
+profile in a new tab.
+
+## Santo Domingo Este targeting
+
+`config/scan_areas.yml` contains 12 `sde-*` circles (1.5–2.5 km, centers from
+OpenStreetMap neighborhood nodes) covering Ensanche Ozama, Alma Rosa,
+Los Mina, the Av. San Vicente de Paúl corridor, Villa Faro, La Isabelita,
+Av. España, Av. Charles de Gaulle, Cancino, Invivienda, Hainamosa and
+San Isidro / Prados de San Luis. `config/scan_matrix.yml` maps each area to
+the 2–3 business categories that fit its commercial profile (36 requests
+total) — run it with `--matrix`. Businesses with no valid Nearby Search type
+(AC technicians, aluminum & glass, solar installers, ...) are deliberately
+NOT forced into wrong categories; see `docs/text_search_phase2.md` for the
+planned Text Search approach.
+
+## Public vs. private outputs — what gets published
+
+**This repository and its GitHub Pages site are public.** So the export step
+writes two very different things:
+
+- **PUBLIC (`reports/`, committed):** a neutral business directory only —
+  name, category, neighborhood, address, publicly listed phone/website,
+  rating, Maps link, plus a neighborhood filter. No scores, no priorities,
+  no lead types, no offers, no notes, no presence analysis.
+- **PRIVATE (`private/`, gitignored):** the full research view — scores,
+  verify/sales priorities, presence analysis, recommended offers, notes,
+  brand clusters, quick-search links, CSV and JSON. Never commit, publish
+  or share these files.
+
+Manual verification results follow the same split: the committed
+`config/manual_checks.yml` may hold only neutral status values
+(place_id + online_presence); all evidence and sales notes belong in
+`config/manual_checks.local.yml` (gitignored, same format plus `note`).
 
 Repeated scans **merge**: results are deduplicated by Google place id, and a
 re-scan refreshes the stored data for the places it finds (this is how you
@@ -154,16 +202,19 @@ refresh data before an outreach round). Use `--fresh` to wipe and start over.
 
 ## Open the report on your phone (GitHub Pages)
 
-The repository doubles as a small static site so you can read the reports
-from anywhere:
+The repository doubles as a small static site — but only the **public
+directory pages** are published:
 
 - `index.html` — landing page with two big buttons
-- `reports/leads_mobile.html` — phone-friendly cards
-- `reports/leads.html` — full desktop table
+- `reports/leads_mobile.html` — phone-friendly directory cards
+- `reports/leads.html` — desktop directory table
 
-**Open it locally:** double-click `reports/leads.html` (or
-`reports/leads_mobile.html`) — they are plain HTML files and open in any
-browser without a server.
+**The private research reports never go online.** To use them on the go,
+open `private/leads_mobile.html` locally or copy it to your phone yourself —
+do not commit it, upload it, or serve it from Pages.
+
+**Open any report locally:** double-click the HTML file — they are plain
+HTML files and open in any browser without a server.
 
 **Enable GitHub Pages** (one-time, already done for this repo):
 
@@ -174,14 +225,16 @@ browser without a server.
    `https://<your-username>.github.io/<repo>/`.
 
 **Open it from an iPhone:** open the Pages URL in Safari, tap
-**Open Mobile Report**, then use Share → **Add to Home Screen** to keep it
+**Open Mobile Directory**, then use Share → **Add to Home Screen** to keep it
 one tap away. Business names open the Google Maps profile straight into the
 Maps app.
 
 **Privacy warning:** GitHub Pages sites are **public** even on a private
-repository — anyone with the URL can read the published lead report. Only
-commit reports you are comfortable exposing, and never commit `.env`, API
-keys or other credentials (the `.gitignore` blocks the usual suspects).
+repository — anyone with the URL can read the published pages. That is why
+only the neutral directory is committed: sales research (scores, priorities,
+pitches, verification evidence) stays in the gitignored `private/` folder
+and `config/manual_checks.local.yml`. Never commit those, `.env`, API keys
+or other credentials (the `.gitignore` blocks all of them).
 
 **Keep it fresh:** the published report is a snapshot. Before an outreach
 round, re-run scan → score → export, then commit and push the regenerated
@@ -225,16 +278,19 @@ simply isn't linked on Google. So the tool tracks two separate things:
 `unknown_not_checked` (default — the tool never probes social networks),
 `weak_or_missing`, `has_social_presence`, `has_booking_presence`,
 `has_directory_presence`, `has_website` (the verified values only come from
-**your** entries in `config/manual_checks.yml`), and `needs_manual_review`.
+**your** entries in `config/manual_checks.yml` or
+`config/manual_checks.local.yml`), and `needs_manual_review`.
 
 ## The manual verification workflow
 
-1. Export the report and sort by score / "Verify priority" (`high` first).
+1. Open `private/leads.html` and sort by score / "Verify priority" (`high` first).
 2. Use each row's **quick search links** (Google, Instagram, Facebook site
    searches — generated links only, nothing is scraped) to check the
    business by hand.
-3. Record what you found in `config/manual_checks.yml` (the file explains
-   the format; the `id` for each lead is in `reports/leads.csv`).
+3. Record what you found in `config/manual_checks.local.yml` (gitignored;
+   `config/manual_checks.yml` explains the format; the `id` for each lead is
+   in `private/leads.csv`). Only neutral status values may go in the
+   committed `manual_checks.yml` — evidence and notes stay in the local file.
 4. Re-run `py scripts/score_leads.py` and `py scripts/export_report.py`.
 
 Only after step 3 can a lead become a `NEW_WEBSITE_LEAD` (+25 score) with
@@ -334,7 +390,7 @@ keywords like banco/arena/estadio/plaza — the lists are constants at the
 top of `scripts/score_leads.py`.)
 
 The verification workflow is what moves leads: check a `Verify: high` row by
-hand, record the result in `config/manual_checks.yml`, re-run score + export
+hand, record the result in `config/manual_checks.local.yml`, re-run score + export
 — a confirmed gap jumps to `Sales: high` (`NEW_WEBSITE_LEAD`), a business
 that turned out to have presence drops to low. Manually verifying a chain or
 institutional place as `weak_or_missing` overrides the demotion — that is
@@ -368,8 +424,8 @@ manually verified the lead:
   Places API for that profile**. Small businesses often run on Instagram,
   Facebook, Fresha or a site that simply isn't linked on Google. Use the
   report's quick search links to check, record the result in
-  `config/manual_checks.yml`, and re-run the score/export steps — if a site
-  exists, the real offer is a profile cleanup, not a new website.
+  `config/manual_checks.local.yml`, and re-run the score/export steps — if a
+  site exists, the real offer is a profile cleanup, not a new website.
 - **Multi-location businesses (any `cluster_size` > 1, any "Review?" flag)
   require manual verification before outreach.** Same-name places can be
   unrelated; branches can be run by different owners; chains have head
@@ -398,18 +454,25 @@ manually verified the lead:
 ## Cost control
 
 - **The field mask decides the price.** Each request's billing tier (SKU)
-  depends on which fields you ask for. The contact fields
-  (`nationalPhoneNumber`, `websiteUri`) put Nearby Search into a higher tier
-  than basic fields — check current pricing at
-  <https://developers.google.com/maps/billing-and-pricing>. If you want
-  cheaper scans, remove those two fields from `FIELD_MASK` in
-  `scripts/scan_places.py` (phone/website scoring then degrades).
-- One scan run = (selected areas × selected categories) requests, each
-  returning at most 20 places. `--all` with the sample configs = 2 × 5 =
-  10 requests. Start with one area and one category.
-- Set a **budget alert and quota caps** in Google Cloud so a mistake can't
-  become an expensive surprise. Google Maps Platform includes some free
-  monthly usage — check the current amount, it changes.
+  depends on which fields you ask for. The contact + rating fields
+  (`nationalPhoneNumber`, `websiteUri`, `rating`, `userRatingCount`) put this
+  scanner in the **Nearby Search Enterprise** SKU — US$35 per 1,000 requests
+  at the time of writing, with (under the current per-SKU free-tier model
+  that replaced the old US$200 monthly credit in March 2025) **1,000 free
+  Enterprise-tier calls per month**. Check current numbers at
+  <https://developers.google.com/maps/billing-and-pricing/pricing>. Every run
+  prints the exact FieldMask and SKU before any request is made. No
+  Atmosphere fields (reviews, photos, summaries) are ever requested, and the
+  wildcard mask is never used.
+- One scan run = one request per (area × category) pair, each returning at
+  most 20 places. `--matrix` = 36 requests; `--all` with the current configs
+  = 14 × 6 = **84 requests** — prefer `--matrix`. Preview any run with
+  `--dry-run` (zero API calls) and cap it with `--max-requests N`. Every real
+  run is appended to `data/request_log.json`.
+- A **budget alert is not a spending cap** — it only emails you. For a hard
+  stop, set a **quota limit** in Google Cloud Console: *APIs & Services →
+  Places API (New) → Quotas → "Requests per day"* — cap it at e.g. 100/day.
+  Recommended, but only you should change your Cloud account settings.
 
 ## Troubleshooting
 
@@ -433,9 +496,11 @@ manually verified the lead:
   uses the one its Google types fit best (`matched_category`).
 - Brand clustering only merges **identical** normalized names — deliberately
   conservative. Rename lookalikes by hand if you know they're one brand.
-- Raw and scored data live in `data/` (gitignored); polished reports in
-  `reports/`. Both are disposable by design.
-- Reports are sorted by score, highest first.
+- Raw and scored data live in `data/` (gitignored); the public directory in
+  `reports/`; the research reports in `private/` (gitignored). All of it is
+  disposable by design.
+- Private reports are sorted by score, highest first; the public directory
+  is sorted by category then name and carries no ranking information.
 - Offers are capped at 2 per lead to keep pitches simple.
 - No database, dashboard, CRM, or automation — by design, this is v1.
 
@@ -444,18 +509,25 @@ manually verified the lead:
 ```
 local-business-leads/
 ├── README.md
-├── index.html            # GitHub Pages landing page (links to both reports)
+├── index.html            # GitHub Pages landing page (public directory)
 ├── .env.example          # template for your API key (copy to .env)
 ├── requirements.txt
 ├── config/
-│   ├── scan_areas.yml    # where to scan
+│   ├── scan_areas.yml    # where to scan (incl. the 12 sde-* circles)
+│   ├── scan_matrix.yml   # targeted SDE area x category scan plan
 │   ├── categories.yml    # what kinds of businesses to look for
-│   └── manual_checks.yml # your hand-verified online-presence results
+│   ├── manual_checks.yml # committed: neutral verification statuses only
+│   └── manual_checks.local.yml  # gitignored: evidence + sales notes
 ├── scripts/
 │   ├── common.py         # shared helpers (paths, config loading, JSON)
-│   ├── scan_places.py    # step 1: call the Places API
+│   ├── scan_places.py    # step 1: call the Places API (--matrix/--dry-run/...)
 │   ├── score_leads.py    # step 2: score + recommend an offer
-│   └── export_report.py  # step 3: write CSV / JSON / HTML reports
-├── data/                 # created by the scripts (short-term working data)
-└── reports/              # leads.csv/.json/.html + leads_mobile.html (generated)
+│   └── export_report.py  # step 3: public directory + private research reports
+├── tests/                # py -m unittest discover -s tests
+├── docs/
+│   └── text_search_phase2.md  # planned (NOT implemented) Text Search adapter
+├── data/                 # created by the scripts (short-term working data,
+│                         # incl. request_log.json — your API usage log)
+├── reports/              # PUBLIC directory pages (committed, Pages)
+└── private/              # PRIVATE research reports (gitignored, never commit)
 ```

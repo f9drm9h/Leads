@@ -217,11 +217,15 @@ categories:
       - banquet_hall
       - wedding_venue
       - florist
+      - catering_service      # verified in Table A 2026-07-10
+    # NOTE: photography has NO valid Nearby Search type (photographer,
+    # photography_studio, caterer, party_planner, dj_service, event_planner
+    # are all absent from Table A) — photographers/decorators are a Text
+    # Search phase-2 target, see docs/text_search_phase2.md.
     also_match_types:
       - photographer
       - photography_studio
       - caterer
-      - catering_service
       - dj_service
       - party_planner
       - event_planner
@@ -246,3 +250,43 @@ categories:
     menu_based: false
     question_heavy: true
     recommended_offer: "Quote request form with photo gallery"
+
+  - label: home_services
+    # Every included type verified against Table A of the official place-type
+    # docs on 2026-07-10. air_conditioning_contractor does NOT exist as a
+    # type; general_contractor is Table B (response-only) so it may appear in
+    # also_match_types but must never be sent to the API. AC/refrigeration,
+    # aluminum & glass, solar, waterproofing etc. have no Nearby Search type
+    # at all — those are Text Search phase-2 targets (docs/text_search_phase2.md).
+    included_types:
+      - electrician
+      - plumber
+      - painter
+      - roofing_contractor
+      - locksmith
+    also_match_types:
+      - general_contractor    # Table B: valid in responses, local matching only
+      - moving_company
+      - storage
+    excluded_types:
+      - hardware_store
+      - home_improvement_store
+      - furniture_store
+      - appliance_store
+    excluded_name_keywords:
+      - ferreteria
+      - "materiales de construccion"
+    included_name_keywords:
+      - electricista
+      - plomeria
+      - plomero*
+      - cerrajeria
+      - cerrajero*
+      - pintor*
+      - herrero
+      - herreria
+    appointment_based: false
+    quote_based: true
+    menu_based: false
+    question_heavy: true
+    recommended_offer: "Quote request form with WhatsApp button"

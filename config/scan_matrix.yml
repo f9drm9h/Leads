@@ -1,0 +1,61 @@
+# Targeted Santo Domingo Este scan matrix.
+#
+# Instead of scanning every category in every neighborhood (12 areas x 6
+# categories = 72 requests), each area only gets the categories that fit its
+# commercial profile. Run the whole matrix with:
+#
+#     py scripts/scan_places.py --matrix
+#     py scripts/scan_places.py --matrix --dry-run      (preview, no API calls)
+#     py scripts/scan_places.py --matrix --max-requests 40
+#
+# One Nearby Search (New) request is made per (area x category) pair:
+# 36 requests total. Results merge into data/scan_results.json by place id,
+# exactly like every other scan mode.
+#
+# Approved pilot (run these BEFORE the full matrix):
+#     py scripts/scan_places.py --area sde-ensanche-ozama --category salons
+#     py scripts/scan_places.py --area sde-charles-de-gaulle --category auto_services
+#
+# Secondary categories (approved for later, NOT in this first-scan matrix):
+# gyms/fitness (types: gym, fitness_center) and laundries (type: laundry) —
+# all three types verified in Table A on 2026-07-10. Add them here when the
+# first outreach round is done.
+#
+# Area labels must exist in scan_areas.yml; category labels in categories.yml.
+
+matrix:
+  # Ensanche Ozama & Alma Rosa: beauty, food, events
+  - area: sde-ensanche-ozama
+    categories: [salons, restaurants, event_services]
+  - area: sde-alma-rosa
+    categories: [salons, restaurants, event_services]
+
+  # Los Mina & San Vicente corridor: beauty, phone repair, food
+  - area: sde-los-mina
+    categories: [salons, phone_repair, restaurants]
+  - area: sde-san-vicente
+    categories: [salons, phone_repair, restaurants]
+
+  # Villa Faro, Hainamosa, Charles de Gaulle: auto, home services, phone repair
+  - area: sde-villa-faro
+    categories: [auto_services, home_services, phone_repair]
+  - area: sde-hainamosa
+    categories: [auto_services, home_services, phone_repair]
+  - area: sde-charles-de-gaulle
+    categories: [auto_services, home_services, phone_repair]
+
+  # Invivienda & Cancino: home services, auto, beauty
+  - area: sde-invivienda
+    categories: [home_services, auto_services, salons]
+  - area: sde-cancino
+    categories: [home_services, auto_services, salons]
+
+  # San Isidro / Prados de San Luis (one circle covers both): auto, home, food
+  - area: sde-san-isidro
+    categories: [auto_services, home_services, restaurants]
+
+  # La Isabelita & Av. Espana: food, events, auto
+  - area: sde-isabelita
+    categories: [restaurants, event_services, auto_services]
+  - area: sde-avenida-espana
+    categories: [restaurants, event_services, auto_services]
