@@ -99,8 +99,11 @@ paging, so several small circles cover a city much better than one huge one.
 
 ## Configure categories
 
-Edit `config/categories.yml`. Five samples are included (salons,
-phone repair, auto services, restaurants, event services):
+Edit `config/categories.yml`. Twelve categories are included: the original
+six (salons, phone repair, auto services, restaurants, event services, home
+services) plus the service-category expansion (nightlife, event venues,
+fitness, pet services, transport rental, moving & storage) — all of them
+reservation-, appointment-, membership- or quote-driven businesses:
 
 ```yaml
 categories:
@@ -145,6 +148,8 @@ py scripts/scan_places.py --area-prefix sde             # every sde-* area
 py scripts/scan_places.py --matrix                      # targeted SDE scan matrix
 py scripts/scan_places.py --matrix --dry-run            # preview, zero API calls
 py scripts/scan_places.py --matrix --max-requests 40    # hard request cap
+py scripts/scan_places.py --matrix --matrix-categories nightlife,fitness
+                                                        # only those matrix pairs
 py scripts/scan_places.py --all                         # every area x category
 py scripts/scan_places.py --all --fresh                 # discard old data first
 py scripts/score_leads.py                               # rank the leads
@@ -171,11 +176,13 @@ OpenStreetMap neighborhood nodes) covering Ensanche Ozama, Alma Rosa,
 Los Mina, the Av. San Vicente de Paúl corridor, Villa Faro, La Isabelita,
 Av. España, Av. Charles de Gaulle, Cancino, Invivienda, Hainamosa and
 San Isidro / Prados de San Luis. `config/scan_matrix.yml` maps each area to
-the 2–3 business categories that fit its commercial profile (36 requests
-total) — run it with `--matrix`. Businesses with no valid Nearby Search type
-(AC technicians, aluminum & glass, solar installers, ...) are deliberately
-NOT forced into wrong categories; see `docs/text_search_phase2.md` for the
-planned Text Search approach.
+the business categories that fit its commercial profile (the original 36
+requests plus a 25-request service-category expansion: nightlife, event
+venues, fitness, pet services, transport & moving) — run it with `--matrix`.
+Businesses with no valid Nearby Search type (AC technicians, aluminum &
+glass, solar installers, pet groomers, dog trainers, boxing/martial-arts/
+pilates studios, ...) are deliberately NOT forced into wrong categories; see
+`docs/text_search_phase2.md` for the planned Text Search approach.
 
 ## Public vs. private outputs — what gets published
 
@@ -465,10 +472,11 @@ manually verified the lead:
   Atmosphere fields (reviews, photos, summaries) are ever requested, and the
   wildcard mask is never used.
 - One scan run = one request per (area × category) pair, each returning at
-  most 20 places. `--matrix` = 36 requests; `--all` with the current configs
-  = 14 × 6 = **84 requests** — prefer `--matrix`. Preview any run with
-  `--dry-run` (zero API calls) and cap it with `--max-requests N`. Every real
-  run is appended to `data/request_log.json`.
+  most 20 places. `--matrix` = 61 requests (the original 36 + the 25-request
+  service-category expansion); `--all` with the current configs = 14 × 12 =
+  **168 requests** — never use `--all`, prefer `--matrix`. Preview any run
+  with `--dry-run` (zero API calls) and cap it with `--max-requests N`. Every
+  real run is appended to `data/request_log.json`.
 - A **budget alert is not a spending cap** — it only emails you. For a hard
   stop, set a **quota limit** in Google Cloud Console: *APIs & Services →
   Places API (New) → Quotas → "Requests per day"* — cap it at e.g. 100/day.

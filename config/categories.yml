@@ -251,6 +251,255 @@ categories:
     question_heavy: true
     recommended_offer: "Quote request form with photo gallery"
 
+  # ---- Service-category expansion (feat/service-category-expansion) ----
+  # Every included type below was re-verified against Table A of the official
+  # place-types docs on 2026-07-11. Types that DO NOT exist as Nearby Search
+  # filters and were therefore rejected: pilates_studio, martial_arts,
+  # boxing_gym, dance_school, personal_trainer, pet_groomer, pet_grooming,
+  # dog_trainer, pet_sitter, party_planner, event_planner,
+  # airport_shuttle_service, limousine_service, truck_rental. Trades that only
+  # exist as names (pet grooming, dog training, boxing/martial-arts gyms) are
+  # Text Search phase-2 candidates — see docs/text_search_phase2.md.
+
+  - label: nightlife
+    # Bars, sports bars, pubs, nightclubs, karaoke and live-music venues.
+    # These businesses sell tables, birthdays and private events — ideal for
+    # a digital menu, weekly event calendar and WhatsApp reservation flows.
+    # Liquor stores / colmados / supermarkets are retail, not nightlife:
+    # they are excluded by type and by name below.
+    included_types:
+      - bar
+      - sports_bar
+      - pub
+      - bar_and_grill
+      - night_club
+      - karaoke
+    also_match_types:
+      - wine_bar
+      - live_music_venue
+      - comedy_club
+      - dance_hall
+      - concert_hall
+    excluded_types:
+      - liquor_store
+      - convenience_store
+      - supermarket
+      - grocery_store
+      - lodging
+    excluded_name_keywords:
+      - colmado*
+      - licoreria*
+      - supermercado
+      - "mini market"
+      - minimarket
+    included_name_keywords:
+      - bar
+      - lounge
+      - terraza
+      - disco
+      - discoteca
+      - "night club"
+      - nightclub
+      - karaoke
+      - cerveceria
+      - taberna
+      - pub
+      - billar
+    appointment_based: false
+    quote_based: true          # birthday packages / private events are quoted
+    menu_based: true           # drinks & food menu
+    question_heavy: false
+    recommended_offer: "Digital menu + WhatsApp table/birthday reservation page"
+
+  - label: event_venues
+    # Venue businesses ONLY (banquet halls, wedding/party venues, terraces,
+    # small event centers). Decorators, florists, caterers, DJs and
+    # photographers stay in event_services so venues remain distinguishable
+    # in the reports. event_services keeps its venue types for backward
+    # compatibility with already-scanned leads; when both categories found a
+    # lead, the most recent scan wins the tie, so venues migrate here.
+    included_types:
+      - event_venue
+      - banquet_hall
+      - wedding_venue
+    also_match_types:
+      - community_center
+      - convention_center
+    excluded_types:
+      - florist
+      - catering_service
+      - night_club
+      - lodging
+      - restaurant
+    excluded_name_keywords:
+      - hotel
+      - floristeria
+      - "decoraciones"
+    included_name_keywords:
+      - eventos
+      - "salon de eventos"
+      - "centro de eventos"
+      - "salon de fiestas"
+      - banquetes
+      - bodas
+      - terraza
+      - rooftop
+      - villa
+    appointment_based: false
+    quote_based: true
+    menu_based: false
+    question_heavy: true       # capacity, packages, rules, parking, dates...
+    recommended_offer: "Capacity & package page with gallery + date-availability request form"
+
+  - label: fitness
+    # Independent gyms, fitness centers, studios and sports academies —
+    # membership/class businesses. Boxing, martial arts, pilates and personal
+    # trainers have NO Nearby Search type; they are only reachable here via
+    # gym/fitness_center/sports_coaching types or name keywords.
+    included_types:
+      - gym
+      - fitness_center
+      - yoga_studio
+      - sports_club
+      - sports_coaching
+    also_match_types:
+      - sports_activity_location
+      - swimming_pool
+    excluded_types:
+      - stadium
+      - arena
+      - park
+      - playground
+      - sporting_goods_store
+    excluded_name_keywords:
+      - polideportivo
+      - "centro olimpico"
+      - "play de beisbol"
+    included_name_keywords:
+      - gym
+      - gimnasio
+      - fitness
+      - crossfit
+      - "artes marciales"
+      - karate
+      - taekwondo
+      - judo
+      - boxeo
+      - boxing
+      - mma
+      - yoga
+      - pilates
+      - zumba
+      - spinning
+      - "academia de beisbol"
+    appointment_based: true    # classes, trials, training slots
+    quote_based: false
+    menu_based: false
+    question_heavy: false
+    recommended_offer: "Membership & class-schedule page with WhatsApp free-trial request"
+
+  - label: pet_services
+    # Pet boarding/daycare, pet care and small veterinary practices.
+    # Grooming and dog training have NO Nearby Search type — discoverable
+    # here only when a groomer carries pet_care/veterinary_care types or a
+    # grooming name keyword; otherwise they are Text Search phase-2 targets.
+    # pet_store alone is retail and excluded; agroveterinarias (farm-supply
+    # shops) are retail too.
+    included_types:
+      - pet_care
+      - pet_boarding_service
+      - veterinary_care
+    also_match_types: []
+    excluded_types:
+      - pet_store
+    excluded_name_keywords:
+      - "pet shop"
+      - "pet store"
+      - agroveterinaria
+    included_name_keywords:
+      - veterinaria
+      - grooming
+      - "peluqueria canina"
+      - "guarderia canina"
+      - mascota*
+      - "pet care"
+      - "pet hotel"
+    appointment_based: true
+    quote_based: false
+    menu_based: false
+    question_heavy: true       # vaccination/boarding requirements, pet info
+    recommended_offer: "Services & pricing page + WhatsApp appointment with pet-info form"
+
+  - label: transport_rental
+    # Independent car rentals, airport transfers, chauffeur and local
+    # transport services (San Isidro / Charles de Gaulle sit on the airport
+    # corridor). Kept separate from moving_storage because the offer differs:
+    # these sell RESERVATIONS (pickup, destination, dates, vehicle).
+    included_types:
+      - car_rental
+      - chauffeur_service
+      - transportation_service
+    also_match_types:
+      - taxi_service
+    excluded_types:
+      - car_repair
+      - car_dealer
+      - car_wash
+      - auto_parts_store
+      - gas_station
+      - moving_company
+      - storage
+      - courier_service
+    excluded_name_keywords:
+      - mudanza*
+      - courier
+      - mensajeria
+      - paqueteria
+    included_name_keywords:
+      - "rent a car"
+      - "rent car"
+      - rental
+      - alquiler
+      - "renta de vehiculos"
+      - transporte
+      - transfer*
+      - chofer*
+      - taxi
+    appointment_based: true    # reservation request = booking a slot
+    quote_based: false
+    menu_based: false
+    question_heavy: false
+    recommended_offer: "Reservation-request page (pickup, destination, dates, vehicle) + WhatsApp"
+
+  - label: moving_storage
+    # Moving companies, couriers and storage businesses — quote-driven
+    # scheduled work (origin/destination, rooms, floors, moving date).
+    included_types:
+      - moving_company
+      - courier_service
+      - storage
+    also_match_types: []
+    excluded_types:
+      - car_rental
+      - car_repair
+      - car_dealer
+      - gas_station
+      - hardware_store
+    excluded_name_keywords:
+      - "rent a car"
+    included_name_keywords:
+      - mudanza*
+      - acarreo*
+      - courier
+      - mensajeria
+      - paqueteria
+      - envios
+    appointment_based: false
+    quote_based: true
+    menu_based: false
+    question_heavy: true       # property type, floors, elevator, photos...
+    recommended_offer: "Moving quote-request form (origin, destination, rooms, date, photos) + WhatsApp"
+
   - label: home_services
     # Every included type verified against Table A of the official place-type
     # docs on 2026-07-10. air_conditioning_contractor does NOT exist as a

@@ -19,6 +19,21 @@ Nearby Search (New) filters by `includedTypes`, which must come from
 | Custom doors & windows | — | nothing close exists |
 | Photographers (event services) | `photographer`, `photography_studio` | do not exist |
 
+Re-checked against Table A on 2026-07-11 during the service-category
+expansion — these also have **no** Nearby Search type and are Text Search
+candidates (query ideas in Spanish, same location-bias model):
+
+| Trade | Types checked | Result / query idea |
+|---|---|---|
+| Pet grooming | `pet_groomer`, `pet_grooming` | do not exist — "grooming / peluquería canina" |
+| Dog training / pet sitting | `dog_trainer`, `pet_sitter` | do not exist — "adiestramiento canino" |
+| Boxing & martial-arts gyms | `boxing_gym`, `martial_arts` | do not exist — "gimnasio de boxeo", "artes marciales" (partially reachable via `gym`/`fitness_center` types) |
+| Pilates / dance studios | `pilates_studio`, `dance_school` | do not exist — "estudio de pilates", "academia de baile" |
+| Personal trainers | `personal_trainer` | does not exist — "entrenador personal" |
+| Party / event planners | `party_planner`, `event_planner` | do not exist — "organizador de eventos" |
+| Airport shuttles / limousines | `airport_shuttle_service`, `limousine_service` | do not exist (reachable via `transportation_service`/`chauffeur_service`) — "transfer aeropuerto" |
+| Truck rental | `truck_rental` | does not exist — "alquiler de camiones" |
+
 `general_contractor` exists but only in **Table B** (response-only): it can
 appear in results but is rejected as a Nearby Search filter. Forcing these
 trades into wrong Table A types (e.g. scanning `electrician` hoping for AC
