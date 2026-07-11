@@ -376,6 +376,18 @@ GENERIC_BRAND_TOKENS = {
     # events
     "eventos", "evento", "fiestas", "party", "decoracion", "decoraciones",
     "floristeria", "flores", "catering",
+    # nightlife
+    "lounge", "terraza", "disco", "discoteca", "karaoke", "club",
+    "billar", "cerveceria", "taberna", "pub",
+    # fitness
+    "gym", "gimnasio", "fitness", "crossfit", "yoga", "academia",
+    # pets
+    "veterinaria", "veterinario", "mascota", "mascotas", "pet", "pets",
+    "grooming", "canino", "canina",
+    # transport & moving
+    "rent", "renta", "rental", "alquiler", "transporte", "taxi", "tours",
+    "mudanza", "mudanzas", "acarreo", "acarreos", "courier", "envios",
+    "storage", "deposito",
     # commerce / places
     "colmado", "supermercado", "market", "minimarket", "tienda", "store",
     "shop", "boutique", "centro", "plaza", "casa", "grupo", "group",

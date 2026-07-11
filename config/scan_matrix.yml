@@ -16,10 +16,9 @@
 #     py scripts/scan_places.py --area sde-ensanche-ozama --category salons
 #     py scripts/scan_places.py --area sde-charles-de-gaulle --category auto_services
 #
-# Secondary categories (approved for later, NOT in this first-scan matrix):
-# gyms/fitness (types: gym, fitness_center) and laundries (type: laundry) —
-# all three types verified in Table A on 2026-07-10. Add them here when the
-# first outreach round is done.
+# Secondary categories (approved for later, NOT in the matrix yet):
+# laundries (type: laundry, verified in Table A 2026-07-10). Fitness was
+# promoted into the service-category expansion below on 2026-07-11.
 #
 # Area labels must exist in scan_areas.yml; category labels in categories.yml.
 
@@ -59,3 +58,44 @@ matrix:
     categories: [restaurants, event_services, auto_services]
   - area: sde-avenida-espana
     categories: [restaurants, event_services, auto_services]
+
+  # ---- Service-category expansion (2026-07-11): 25 additional targeted
+  # ---- requests. Reservation/appointment/membership/quote businesses only.
+  #
+  # Overlap review: the western circles (ensanche-ozama, alma-rosa, los-mina,
+  # san-vicente) partially overlap on purpose — each request returns only the
+  # ~20 most prominent matches, so re-sampling surfaces different businesses;
+  # duplicates merge by place id. Nightlife deliberately targets the Av.
+  # Espana corridor (the SDE waterfront strip) instead of Isabelita; Los Mina
+  # and San Vicente can be added later IF the first round shows real
+  # nightlife density there. Transport splits the 4 planned areas by offer:
+  # rentals/transfers on the airport corridor (san-isidro, charles-de-gaulle),
+  # movers/couriers/storage on the residential + artery circles.
+
+  # Nightlife: dense bar zones + the coastal entertainment strip.
+  - area: sde-ensanche-ozama
+    categories: [nightlife, fitness, pet_services]
+  - area: sde-alma-rosa
+    categories: [nightlife, event_venues, fitness, pet_services]
+  - area: sde-avenida-espana
+    categories: [nightlife]
+
+  # Event venues: party/wedding spaces in residential expansion zones.
+  - area: sde-isabelita
+    categories: [event_venues, pet_services]
+  - area: sde-invivienda
+    categories: [event_venues, fitness, moving_storage]
+  - area: sde-san-isidro
+    categories: [event_venues, fitness, pet_services, transport_rental]
+  - area: sde-hainamosa
+    categories: [event_venues, fitness, pet_services, moving_storage]
+
+  # Fitness in the remaining dense corridors.
+  - area: sde-los-mina
+    categories: [fitness]
+  - area: sde-san-vicente
+    categories: [fitness]
+
+  # Transport & moving on the airport corridor and main arteries.
+  - area: sde-charles-de-gaulle
+    categories: [transport_rental, moving_storage]

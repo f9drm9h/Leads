@@ -133,8 +133,9 @@ ONLINE_PRESENCE_LABELS = {
     "needs_manual_review": "Needs manual check",
 }
 
-# Shared neighborhood-filter widget: a dropdown that hides every element
-# whose data-areas attribute does not contain the selected area label.
+# Shared filter widget: a neighborhood dropdown and a category dropdown that
+# together hide every element whose data-areas / data-cats attributes do not
+# contain the selected values. Both filters apply at the same time.
 FILTER_CSS = """\
   .filterbar { margin: 0 0 14px; display: flex; align-items: center;
                gap: 8px; flex-wrap: wrap; font-size: 13px; }
@@ -146,21 +147,28 @@ FILTER_CSS = """\
 FILTER_SCRIPT = """\
 <script>
 (function () {
-  var select = document.getElementById("area-filter");
-  if (!select) return;
+  var areaSelect = document.getElementById("area-filter");
+  var catSelect = document.getElementById("category-filter");
+  if (!areaSelect && !catSelect) return;
   var counter = document.getElementById("area-filter-count");
+  function matches(item, select, attr) {
+    if (!select || !select.value) return true;
+    var values = (item.getAttribute(attr) || "").split("|");
+    return values.indexOf(select.value) !== -1;
+  }
   function apply() {
-    var wanted = select.value, shown = 0;
-    var items = document.querySelectorAll("[data-areas]");
+    var shown = 0;
+    var items = document.querySelectorAll("[data-areas], [data-cats]");
     for (var i = 0; i < items.length; i++) {
-      var areas = (items[i].getAttribute("data-areas") || "").split("|");
-      var show = !wanted || areas.indexOf(wanted) !== -1;
+      var show = matches(items[i], areaSelect, "data-areas") &&
+                 matches(items[i], catSelect, "data-cats");
       items[i].style.display = show ? "" : "none";
       if (show) shown++;
     }
     if (counter) counter.textContent = shown + " shown";
   }
-  select.addEventListener("change", apply);
+  if (areaSelect) areaSelect.addEventListener("change", apply);
+  if (catSelect) catSelect.addEventListener("change", apply);
   apply();
 })();
 </script>
@@ -496,33 +504,59 @@ def area_display(lead, area_names):
     return "; ".join(area_names.get(label, label) for label in area_labels(lead))
 
 
+def lead_category_label(lead):
+    """The category label a lead is displayed under (matched, else source)."""
+    return lead.get("matched_category") or lead.get("source_category") or ""
+
+
 def data_areas_attr(lead):
-    """data-areas attribute used by the neighborhood filter widget."""
+    """data-areas + data-cats attributes used by the filter widget."""
+    parts = []
     labels = area_labels(lead)
-    if not labels:
-        return ""
-    return f' data-areas="{html.escape("|".join(labels), quote=True)}"'
+    if labels:
+        parts.append(f' data-areas="{html.escape("|".join(labels), quote=True)}"')
+    category = lead_category_label(lead)
+    if category:
+        parts.append(f' data-cats="{html.escape(category, quote=True)}"')
+    return "".join(parts)
 
 
 def build_area_filter(leads, area_names):
-    """The neighborhood <select> for the filter widget ('' = no areas known)."""
+    """Neighborhood + category <select>s for the filter widget."""
     seen = []
     for lead in leads:
         for label in area_labels(lead):
             if label not in seen:
                 seen.append(label)
-    if not seen:
-        return ""
-    options = ['<option value="">All neighborhoods</option>']
-    for label in sorted(seen, key=lambda item: area_names.get(item, item).lower()):
-        display = area_names.get(label, label)
-        options.append(
-            f'<option value="{html.escape(label, quote=True)}">{html.escape(display)}</option>'
+    categories = sorted({lead_category_label(lead) for lead in leads} - {""})
+
+    selects = []
+    if seen:
+        options = ['<option value="">All neighborhoods</option>']
+        for label in sorted(seen, key=lambda item: area_names.get(item, item).lower()):
+            display = area_names.get(label, label)
+            options.append(
+                f'<option value="{html.escape(label, quote=True)}">{html.escape(display)}</option>'
+            )
+        selects.append(
+            '<label for="area-filter"><b>Neighborhood:</b></label> '
+            f'<select id="area-filter">{"".join(options)}</select>'
         )
+    if categories:
+        options = ['<option value="">All categories</option>']
+        for label in categories:
+            options.append(
+                f'<option value="{html.escape(label, quote=True)}">{html.escape(label)}</option>'
+            )
+        selects.append(
+            '<label for="category-filter"><b>Category:</b></label> '
+            f'<select id="category-filter">{"".join(options)}</select>'
+        )
+    if not selects:
+        return ""
     return (
-        '<div class="filterbar"><label for="area-filter"><b>Neighborhood:</b></label> '
-        f'<select id="area-filter">{"".join(options)}</select> '
-        '<span class="count" id="area-filter-count"></span></div>'
+        '<div class="filterbar">' + " ".join(selects) +
+        ' <span class="count" id="area-filter-count"></span></div>'
     )
 
 

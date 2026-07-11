@@ -253,6 +253,27 @@ def pick_by_prefix(areas, prefix):
     return matched
 
 
+def filter_matrix_pairs(pairs, labels_csv, categories):
+    """Keep only the matrix pairs whose category label is in the CSV list."""
+    wanted = [label.strip() for label in labels_csv.split(",") if label.strip()]
+    if not wanted:
+        die("--matrix-categories was given but contains no category labels.")
+    known = {category["label"] for category in categories}
+    unknown = [label for label in wanted if label not in known]
+    if unknown:
+        die(
+            f"--matrix-categories: unknown categor{'y' if len(unknown) == 1 else 'ies'} "
+            f"{', '.join(unknown)}. Available: {', '.join(sorted(known))}"
+        )
+    kept = [(area, cat) for area, cat in pairs if cat["label"] in wanted]
+    if not kept:
+        die(
+            "--matrix-categories matched no pairs in config/scan_matrix.yml "
+            f"for: {', '.join(wanted)}"
+        )
+    return kept
+
+
 def describe_area(area):
     """One line describing a scan area (label, name, center, radius)."""
     name = area.get("name", "")
@@ -291,6 +312,12 @@ def main():
         action="store_true",
         help="scan the targeted area x category pairs from config/scan_matrix.yml",
     )
+    parser.add_argument(
+        "--matrix-categories",
+        metavar="LABELS",
+        help="with --matrix: only run the matrix pairs whose category is in "
+        "this comma-separated list (e.g. 'nightlife,fitness')",
+    )
     parser.add_argument("--fresh", action="store_true", help="discard previously scanned data first")
     parser.add_argument("--list", action="store_true", help="list configured areas and categories, then exit")
     parser.add_argument(
@@ -322,6 +349,8 @@ def main():
         parser.error("--area and --area-prefix are mutually exclusive")
     if args.matrix and (args.all or args.area or args.area_prefix or args.category):
         parser.error("--matrix cannot be combined with --all/--area/--area-prefix/--category")
+    if args.matrix_categories and not args.matrix:
+        parser.error("--matrix-categories only makes sense together with --matrix")
     if not args.all and not args.matrix and not args.area and not args.area_prefix and not args.category:
         parser.error(
             "choose what to scan: --all, --matrix, or --area/--area-prefix "
@@ -337,6 +366,8 @@ def main():
             pairs = load_scan_matrix(areas, categories)
         except ConfigError as exc:
             die(str(exc))
+        if args.matrix_categories:
+            pairs = filter_matrix_pairs(pairs, args.matrix_categories, categories)
     else:
         if args.all:
             selected_areas, selected_categories = areas, categories

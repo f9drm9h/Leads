@@ -151,6 +151,13 @@ KNOWN_FRANCHISE_KEYWORDS = [
     "wendy", "taco bell", "krispy kreme", "dunkin", "starbucks",
     "la sirena", "jumbo", "bravo", "aliss", "plaza lama", "ikea", "sirena",
     "total ", "shell ", "texaco", "esso",
+    # fitness chains
+    "smart fit", "gold s gym", "body shop athletic",
+    # car-rental / transport chains
+    "hertz", "avis ", "alamo ", "europcar", "sixt ", "dollar rent",
+    "enterprise rent", "national rent", "caribe tours",
+    # courier / logistics chains
+    "fedex", "dhl", "ups ", "bm cargo",
 ]
 
 # Types Google attaches to almost anything — they carry no category signal.
@@ -390,21 +397,40 @@ def category_confidence(lead, category):
 
 
 def pick_category(lead, categories):
-    """Choose the best-fitting category among those that found this lead."""
+    """Choose the best-fitting category among those that found this lead.
+
+    Higher category confidence wins. On a confidence tie (e.g. a salon that
+    Google also types as a bar), the category that matches the place's
+    PRIMARY type wins; only then does the most recent scan break the tie.
+    """
     labels = list(lead.get("source_categories") or [])
     last_scanned = lead.get("source_category")
     if last_scanned in labels:  # evaluate the most recent one first (tie-break)
         labels.remove(last_scanned)
         labels.insert(0, last_scanned)
 
-    best_label, best_level, best_reason = None, None, ""
+    best_label, best_level, best_reason, best_primary = None, None, "", False
     for label in labels:
         category = categories.get(label)
         if category is None:
             continue
         level, reason = category_confidence(lead, category)
-        if best_level is None or CONFIDENCE_RANK[level] > CONFIDENCE_RANK[best_level]:
+        primary_hit = bool(lead.get("primary_type")) and bool(
+            match_types(
+                {lead["primary_type"]},
+                category["included_types"] + category["also_match_types"],
+            )
+        )
+        better = best_level is None or CONFIDENCE_RANK[level] > CONFIDENCE_RANK[best_level]
+        tie_break = (
+            best_level is not None
+            and CONFIDENCE_RANK[level] == CONFIDENCE_RANK[best_level]
+            and primary_hit
+            and not best_primary
+        )
+        if better or tie_break:
             best_label, best_level, best_reason = label, level, reason
+            best_primary = primary_hit
 
     if best_label is None:
         # Category was renamed/removed from the config since the scan.
