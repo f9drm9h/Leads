@@ -11,7 +11,13 @@ __pycache__/
 venv/
 
 # Short-term research data (regenerate with the scripts, don't version it).
-# The two HTML reports ARE committed so GitHub Pages can serve them.
+# The two HTML reports ARE committed so GitHub Pages can serve them —
+# they are the PUBLIC directory pages and contain no sales analysis.
 data/
 reports/*.csv
 reports/*.json
+
+# PRIVATE sales research — scores, priorities, presence analysis, pitches,
+# verification evidence. Never commit anything in here.
+private/
+config/manual_checks.local.yml

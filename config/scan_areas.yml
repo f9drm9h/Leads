@@ -1,22 +1,132 @@
 # Where to scan for businesses.
 # Each area is a circle: a center point plus a radius in meters (API max: 50000).
 #
+# Fields per area:
+#   label         - stable identifier used on the command line and in
+#                   scan_matrix.yml. SDE areas all start with "sde-" so
+#                   `--area-prefix sde` selects the whole set.
+#   name          - human-readable neighborhood name (shown in reports)
+#   latitude / longitude / radius_meters - the circle itself
+#
 # Tips:
 #   - Nearby Search returns AT MOST 20 places per request, with no paging.
 #     Several smaller circles find more businesses than one giant circle.
 #   - To get coordinates: right-click any spot in Google Maps and click the
 #     numbers that appear (they are copied as "latitude, longitude").
 #
-# The sample areas below point at Santo Domingo, Dominican Republic.
-# Replace them with your own neighborhoods.
+# SDE circle centers come from OpenStreetMap neighborhood nodes (Nominatim,
+# looked up 2026-07-10). Radii are 1.5-2.5 km depending on commercial density.
+#
+# Overlap with the legacy "east-side" circle: east-side (r=4000) geometrically
+# covers much of western SDE, but a 4 km circle is deeply undersampled — the
+# API returns only the ~20 most prominent places per request. The smaller
+# sde-* circles below deliberately re-sample inside that footprint to surface
+# the local businesses the big circle never returned. sde-cancino's center is
+# ~250 m from east-side's center; it is kept (smaller radius = different
+# sample) and east-side is retired from future scans (see scan_matrix.yml).
 
 areas:
+  # ---- legacy circles (kept so old data stays reproducible; not in the
+  # ---- SDE scan matrix — prefer the sde-* circles for new scans) ----
   - label: default
+    name: Santo Domingo centro (legacy)
     latitude: 18.4861
     longitude: -69.9312
     radius_meters: 3000
 
   - label: east-side
+    name: SDE oeste, circulo amplio (legacy)
     latitude: 18.5089
     longitude: -69.8404
     radius_meters: 4000
+
+  # ---- Santo Domingo Este targeting (feat/sde-targeting) ----
+
+  # Dense river-side commercial zone just east of the Ozama bridges.
+  - label: sde-ensanche-ozama
+    name: Ensanche Ozama
+    latitude: 18.4931
+    longitude: -69.8690
+    radius_meters: 1500
+
+  # Alma Rosa I & II core plus the Av. Sabana Larga shopping streets.
+  - label: sde-alma-rosa
+    name: Alma Rosa I & II
+    latitude: 18.4919
+    longitude: -69.8560
+    radius_meters: 1500
+
+  # Los Mina Sur/Norte — very dense small-business barrio.
+  - label: sde-los-mina
+    name: Los Mina
+    latitude: 18.4995
+    longitude: -69.8660
+    radius_meters: 1500
+
+  # Av. San Vicente de Paul corridor: Megacentro area and the Carretera
+  # Mella junction. Overlaps the edges of los-mina/alma-rosa on purpose —
+  # the avenue is its own commercial strip.
+  - label: sde-san-vicente
+    name: Av. San Vicente de Paul (corredor)
+    latitude: 18.5090
+    longitude: -69.8595
+    radius_meters: 1600
+
+  # Villa Faro plus the Coral Mall / Av. San Isidro commercial edge.
+  - label: sde-villa-faro
+    name: Villa Faro
+    latitude: 18.4948
+    longitude: -69.8321
+    radius_meters: 1800
+
+  # La Isabelita and the Av. Las Americas commercial edge south of it.
+  - label: sde-isabelita
+    name: La Isabelita
+    latitude: 18.4731
+    longitude: -69.8411
+    radius_meters: 1800
+
+  # Av. Espana coastal corridor: Villa Duarte, Sans Souci, Los Mameyes.
+  - label: sde-avenida-espana
+    name: Av. Espana (Villa Duarte - Los Mameyes)
+    latitude: 18.4740
+    longitude: -69.8640
+    radius_meters: 1800
+
+  # Av. Charles de Gaulle x Carretera Mella commercial node, between
+  # Cancino and Hainamosa.
+  - label: sde-charles-de-gaulle
+    name: Av. Charles de Gaulle x Carretera Mella
+    latitude: 18.5140
+    longitude: -69.8330
+    radius_meters: 1800
+
+  # Cancino. Center is ~250 m from the legacy east-side circle's center —
+  # kept with a much smaller radius to re-sample what east-side missed.
+  - label: sde-cancino
+    name: Cancino
+    latitude: 18.5112
+    longitude: -69.8423
+    radius_meters: 1500
+
+  # Invivienda / El Mango, along the southern Charles de Gaulle stretch.
+  - label: sde-invivienda
+    name: Invivienda
+    latitude: 18.5111
+    longitude: -69.8206
+    radius_meters: 1500
+
+  # Hainamosa residential zone and its local commerce.
+  - label: sde-hainamosa
+    name: Hainamosa
+    latitude: 18.5206
+    longitude: -69.8250
+    radius_meters: 1500
+
+  # San Isidro suburb; larger, lower-density circle that also covers the
+  # Prados de San Luis area (no separate OSM node exists for it).
+  - label: sde-san-isidro
+    name: San Isidro / Prados de San Luis
+    latitude: 18.5268
+    longitude: -69.7721
+    radius_meters: 2500

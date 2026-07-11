@@ -8,12 +8,18 @@ Examples:
     py scripts/scan_places.py --area default --category salons
     py scripts/scan_places.py --area default            (all categories, one area)
     py scripts/scan_places.py --category restaurants    (one category, all areas)
+    py scripts/scan_places.py --area-prefix sde         (all SDE areas)
+    py scripts/scan_places.py --matrix                  (targeted SDE scan matrix)
+    py scripts/scan_places.py --matrix --dry-run        (preview, zero API calls)
+    py scripts/scan_places.py --matrix --max-requests 40
     py scripts/scan_places.py --all                     (every area x category)
     py scripts/scan_places.py --all --fresh             (discard old results first)
     py scripts/scan_places.py --list                    (show configured labels)
 
 Results are merged into data/scan_results.json, deduplicated by place id.
 Re-running a scan refreshes the stored data for the places it finds.
+Every real run is appended to data/request_log.json so you can check how
+many API requests were made this month.
 """
 
 import argparse
@@ -26,12 +32,14 @@ from dotenv import load_dotenv
 
 from common import (
     PROJECT_ROOT,
+    REQUEST_LOG_FILE,
     SCAN_RESULTS_FILE,
     ConfigError,
     die,
     load_categories,
     load_json,
     load_scan_areas,
+    load_scan_matrix,
     save_json,
     utc_now_iso,
 )
@@ -56,6 +64,43 @@ FIELD_MASK = ",".join(
         "places.businessStatus",
     ]
 )
+
+# Which SKU tier each requested field falls into, per the official SKU
+# details page (checked 2026-07-10). The most expensive field in the mask
+# decides the SKU for the whole request. Atmosphere fields (reviews,
+# editorialSummary, photos, serves*/allows* flags...) are deliberately
+# never requested.
+NEARBY_PRO_FIELDS = {
+    "places.id",
+    "places.displayName",
+    "places.primaryType",
+    "places.types",
+    "places.formattedAddress",
+    "places.googleMapsUri",
+    "places.businessStatus",
+}
+NEARBY_ENTERPRISE_FIELDS = {
+    "places.nationalPhoneNumber",
+    "places.websiteUri",
+    "places.rating",
+    "places.userRatingCount",
+}
+
+
+def billing_sku(field_mask=FIELD_MASK):
+    """Name the Nearby Search SKU tier this field mask triggers."""
+    fields = set(field_mask.split(","))
+    unknown = fields - NEARBY_PRO_FIELDS - NEARBY_ENTERPRISE_FIELDS
+    if unknown:
+        # A field we never classified — assume the worst tier and say so.
+        return (
+            "UNKNOWN (possibly Enterprise + Atmosphere) — unclassified field(s): "
+            + ", ".join(sorted(unknown))
+        )
+    if fields & NEARBY_ENTERPRISE_FIELDS:
+        return "Nearby Search Enterprise"
+    return "Nearby Search Pro"
+
 
 MAX_RESULTS_PER_REQUEST = 20  # hard limit of Nearby Search (New); no paging
 REQUEST_TIMEOUT_SECONDS = 30
@@ -199,15 +244,67 @@ def pick(items, label, kind):
     die(f"Unknown {kind} '{label}'. Available: {available}")
 
 
+def pick_by_prefix(areas, prefix):
+    """All areas whose label starts with the prefix. Dies when none match."""
+    matched = [area for area in areas if area["label"].startswith(prefix)]
+    if not matched:
+        available = ", ".join(area["label"] for area in areas)
+        die(f"No area label starts with '{prefix}'. Available: {available}")
+    return matched
+
+
+def describe_area(area):
+    """One line describing a scan area (label, name, center, radius)."""
+    name = area.get("name", "")
+    name_part = f" ({name})" if name and name != area["label"] else ""
+    return (
+        f"{area['label']}{name_part} — center {area['latitude']}, "
+        f"{area['longitude']}, radius {area['radius_meters']} m"
+    )
+
+
+def append_request_log(entry):
+    """Append one run summary to data/request_log.json (never crashes a scan)."""
+    try:
+        log = load_json(REQUEST_LOG_FILE, default=[])
+        if not isinstance(log, list):
+            log = []
+    except ConfigError:
+        log = []
+    log.append(entry)
+    save_json(REQUEST_LOG_FILE, log)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Scan for local businesses via the official Google Places API."
     )
     parser.add_argument("--area", help="label of one scan area from config/scan_areas.yml")
+    parser.add_argument(
+        "--area-prefix",
+        help="scan every area whose label starts with this prefix (e.g. 'sde')",
+    )
     parser.add_argument("--category", help="label of one category from config/categories.yml")
     parser.add_argument("--all", action="store_true", help="scan every area x category combination")
+    parser.add_argument(
+        "--matrix",
+        action="store_true",
+        help="scan the targeted area x category pairs from config/scan_matrix.yml",
+    )
     parser.add_argument("--fresh", action="store_true", help="discard previously scanned data first")
     parser.add_argument("--list", action="store_true", help="list configured areas and categories, then exit")
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the requests that WOULD be made, without calling the API",
+    )
+    parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        metavar="N",
+        help="safety cap: never make more than N API requests in this run",
+    )
     args = parser.parse_args()
 
     try:
@@ -221,14 +318,66 @@ def main():
         print("Categories: " + ", ".join(cat["label"] for cat in categories))
         return
 
-    if not args.all and not args.area and not args.category:
-        parser.error("choose what to scan: --all, or --area and/or --category (see --list)")
+    if args.area and args.area_prefix:
+        parser.error("--area and --area-prefix are mutually exclusive")
+    if args.matrix and (args.all or args.area or args.area_prefix or args.category):
+        parser.error("--matrix cannot be combined with --all/--area/--area-prefix/--category")
+    if not args.all and not args.matrix and not args.area and not args.area_prefix and not args.category:
+        parser.error(
+            "choose what to scan: --all, --matrix, or --area/--area-prefix "
+            "and/or --category (see --list)"
+        )
+    if args.max_requests is not None and args.max_requests < 1:
+        parser.error("--max-requests must be at least 1")
 
-    if args.all:
-        selected_areas, selected_categories = areas, categories
+    # Build the list of (area, category) requests for this run.
+    matched_areas = None
+    if args.matrix:
+        try:
+            pairs = load_scan_matrix(areas, categories)
+        except ConfigError as exc:
+            die(str(exc))
     else:
-        selected_areas = pick(areas, args.area, "area")
-        selected_categories = pick(categories, args.category, "category")
+        if args.all:
+            selected_areas, selected_categories = areas, categories
+        else:
+            if args.area_prefix:
+                selected_areas = pick_by_prefix(areas, args.area_prefix)
+                matched_areas = selected_areas
+            else:
+                selected_areas = pick(areas, args.area, "area")
+            selected_categories = pick(categories, args.category, "category")
+        pairs = [(area, cat) for area in selected_areas for cat in selected_categories]
+
+    # Cost transparency BEFORE any API call: the exact field mask, the SKU
+    # tier it triggers, and exactly how many requests are planned.
+    print(f"FieldMask: {FIELD_MASK}")
+    print(f"Billing SKU: {billing_sku()} (one request per area x category pair)")
+    if matched_areas is not None:
+        print(f"--area-prefix '{args.area_prefix}' matched {len(matched_areas)} area(s):")
+        for area in matched_areas:
+            print(f"  - {describe_area(area)}")
+    print(f"Planned requests: {len(pairs)}")
+
+    to_run = pairs
+    if args.max_requests is not None and len(pairs) > args.max_requests:
+        to_run = pairs[: args.max_requests]
+        print(
+            f"--max-requests {args.max_requests}: only the first "
+            f"{len(to_run)} of {len(pairs)} planned requests will run; "
+            f"{len(pairs) - len(to_run)} combination(s) will be skipped."
+        )
+
+    if args.dry_run:
+        print()
+        print("DRY RUN — no API calls will be made. The requests would be:")
+        for index, (area, category) in enumerate(to_run):
+            print(f"  [{index + 1:>3}] {area['label']} x {category['label']} — {describe_area(area)}")
+        skipped = len(pairs) - len(to_run)
+        if skipped:
+            print(f"  (+{skipped} combination(s) beyond --max-requests, not shown above)")
+        print(f"Total requests that would be made: {len(to_run)}")
+        return
 
     api_key = get_api_key()
 
@@ -243,11 +392,10 @@ def main():
     results = {lead["id"]: upgrade_record(lead) for lead in existing if lead.get("id")}
 
     scanned_at = utc_now_iso()
-    pairs = [(area, cat) for area in selected_areas for cat in selected_categories]
     new_count = refreshed_count = failures = 0
 
-    for index, (area, category) in enumerate(pairs):
-        print(f"[{index + 1}/{len(pairs)}] Scanning '{area['label']}' for '{category['label']}' ...")
+    for index, (area, category) in enumerate(to_run):
+        print(f"[{index + 1}/{len(to_run)}] Scanning '{area['label']}' for '{category['label']}' ...")
         try:
             places = search_nearby(api_key, area, category)
         except RuntimeError as exc:
@@ -281,16 +429,33 @@ def main():
             results[lead["id"]] = lead
         print(f"    {len(places)} places returned ({new_here} new).")
 
-        if index < len(pairs) - 1:
+        if index < len(to_run) - 1:
             time.sleep(PAUSE_BETWEEN_REQUESTS)
 
     save_json(SCAN_RESULTS_FILE, list(results.values()))
+    append_request_log(
+        {
+            "started_at": scanned_at,
+            "argv": sys.argv[1:],
+            "field_mask": FIELD_MASK,
+            "billing_sku": billing_sku(),
+            "requests_planned": len(pairs),
+            "requests_attempted": len(to_run),
+            "requests_failed": failures,
+            "new_places": new_count,
+            "refreshed_places": refreshed_count,
+        }
+    )
+    skipped = len(pairs) - len(to_run)
     print()
     print(f"Saved {len(results)} unique businesses to {SCAN_RESULTS_FILE}")
-    print(f"  new this run: {new_count} | refreshed: {refreshed_count} | failed requests: {failures}")
+    print(f"  API requests made: {len(to_run)} (failed: {failures})"
+          + (f" | skipped by --max-requests: {skipped}" if skipped else ""))
+    print(f"  new this run: {new_count} | refreshed: {refreshed_count}")
+    print(f"  usage log: {REQUEST_LOG_FILE}")
     print("Next step: py scripts/score_leads.py")
 
-    if pairs and failures == len(pairs):
+    if to_run and failures == len(to_run):
         die("Every request failed — check your API key, billing and network, then retry.")
 
 

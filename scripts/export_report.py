@@ -1,15 +1,30 @@
-"""Export scored leads to reports/leads.csv, leads.json, leads.html and
-leads_mobile.html (a phone-friendly card version of the same data).
+"""Export scored leads into PUBLIC and PRIVATE reports.
 
 Reads  data/leads_scored.json  (produced by score_leads.py)
 
+PUBLIC output  -> reports/   (committed; served by GitHub Pages — the repo
+                              and Pages site are public!)
+    leads.html, leads_mobile.html — a neutral business DIRECTORY only:
+    name, category, neighborhood, address, publicly listed phone/website,
+    rating and a Google Maps link. No scores, no sales/verification
+    priorities, no presence analysis, no recommended pitches, no notes.
+
+PRIVATE output -> private/   (gitignored; NEVER commit or publish)
+    leads.html, leads_mobile.html, leads.csv, leads.json — the full sales
+    research view: scores, lead types, both priorities, presence analysis,
+    recommended offers, verification notes and shortlist ordering.
+
 Usage:
     py scripts/export_report.py
-    py scripts/export_report.py --min-score 50    (only stronger leads)
+    py scripts/export_report.py --min-score 50    (private reports only show
+                                                   stronger leads; the public
+                                                   directory is unaffected)
 
-CSV and JSON are sorted by score. The HTML report is also score-ordered,
-except that branches of the same brand cluster are pulled together under
-the cluster's best-scoring member so possible chains are easy to spot.
+Private CSV/JSON are sorted by score. The private HTML report is also
+score-ordered, except that branches of the same brand cluster are pulled
+together under the cluster's best-scoring member so possible chains are easy
+to spot. The public directory is sorted by category, then name — it carries
+no ranking information at all.
 """
 
 import argparse
@@ -19,11 +34,13 @@ from string import Template
 from urllib.parse import quote_plus
 
 from common import (
+    PRIVATE_DIR,
     REPORTS_DIR,
     SCORED_LEADS_FILE,
     ConfigError,
     die,
     load_json,
+    load_scan_areas,
     save_json,
     utc_now_iso,
 )
@@ -80,6 +97,23 @@ LIST_COLUMNS = {
     "source_areas",
 }
 
+# The ONLY lead fields that may appear in the public directory pages.
+# Everything else (scores, priorities, lead types, offers, notes, cluster
+# and presence analysis...) is private sales research and stays in private/.
+PUBLIC_FIELDS = (
+    "name",
+    "matched_category",
+    "source_category",
+    "source_areas",
+    "address",
+    "phone",
+    "website",
+    "google_maps_url",
+    "rating",
+    "review_count",
+    "business_status",
+)
+
 # Labels describe the GOOGLE PROFILE only — a missing websiteUri never means
 # the business has no online presence (Instagram, Fresha, Facebook, ...).
 WEBSITE_STATUS_LABELS = {
@@ -99,20 +133,58 @@ ONLINE_PRESENCE_LABELS = {
     "needs_manual_review": "Needs manual check",
 }
 
+# Shared neighborhood-filter widget: a dropdown that hides every element
+# whose data-areas attribute does not contain the selected area label.
+FILTER_CSS = """\
+  .filterbar { margin: 0 0 14px; display: flex; align-items: center;
+               gap: 8px; flex-wrap: wrap; font-size: 13px; }
+  .filterbar select { font-size: 14px; padding: 6px 8px; border-radius: 8px;
+                      border: 1px solid #c7d0d9; background: #fff; max-width: 100%; }
+  .filterbar .count { color: #57606a; }
+"""
+
+FILTER_SCRIPT = """\
+<script>
+(function () {
+  var select = document.getElementById("area-filter");
+  if (!select) return;
+  var counter = document.getElementById("area-filter-count");
+  function apply() {
+    var wanted = select.value, shown = 0;
+    var items = document.querySelectorAll("[data-areas]");
+    for (var i = 0; i < items.length; i++) {
+      var areas = (items[i].getAttribute("data-areas") || "").split("|");
+      var show = !wanted || areas.indexOf(wanted) !== -1;
+      items[i].style.display = show ? "" : "none";
+      if (show) shown++;
+    }
+    if (counter) counter.textContent = shown + " shown";
+  }
+  select.addEventListener("change", apply);
+  apply();
+})();
+</script>
+"""
+
+
 HTML_PAGE = Template("""\
 <!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Local business leads</title>
+<title>Local business leads (private)</title>
 <style>
   body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
          margin: 24px; color: #1c2733; background: #f6f8fa; }
   h1 { margin: 0 0 4px; font-size: 22px; }
   .meta { color: #57606a; margin: 0 0 10px; font-size: 13px; }
+  .private-banner { background: #ffe5e0; color: #a12318; font-weight: 600;
+                    padding: 8px 12px; border-radius: 8px; font-size: 13px;
+                    margin: 0 0 12px; }
   .legend { color: #57606a; font-size: 12px; margin: 0 0 18px; line-height: 1.7; }
   .legend b { color: #1c2733; }
+$filter_css
   .tablewrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; background: #fff;
           box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 13px; }
@@ -163,6 +235,8 @@ HTML_PAGE = Template("""\
 </head>
 <body>
 <h1>Local business leads</h1>
+<p class="private-banner">PRIVATE sales research — this file lives in the
+gitignored <code>private/</code> folder. Do not commit, publish or share it.</p>
 <p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; <b>$lead_count leads</b> &nbsp;&middot;&nbsp;
 $multi_group_count possible multi-location brand group(s) &nbsp;&middot;&nbsp;
 $review_rows row(s) needing manual review &nbsp;&middot;&nbsp;
@@ -174,7 +248,7 @@ short-term research snapshot from the official Google Places API &mdash; re-scan
 the Places API returned no <code>websiteUri</code> for that profile &mdash; the business may still
 have Instagram, Facebook, Fresha/Booksy, a directory page or an unlinked website.
 Use the <b>quick search links</b> to verify by hand, record what you find in
-<code>config/manual_checks.yml</code>, then re-run the score + export steps.
+<code>config/manual_checks.local.yml</code>, then re-run the score + export steps.
 Only manually verified leads are ever labeled definitively.<br>
 <b>Google profile website:</b>
 <span class="badge ws-missing">No website on Google profile</span> not returned by the Places API for any scanned location of this brand &nbsp;&middot;&nbsp;
@@ -183,7 +257,7 @@ Only manually verified leads are ever labeled definitively.<br>
 <span class="badge ws-has">Website on Google profile</span>.<br>
 <b>Verify priority</b> = <i>check this lead first</i>: how urgently a human should confirm the
 business's real online presence (use the quick links, record the result in
-<code>config/manual_checks.yml</code>). &nbsp;
+<code>config/manual_checks.local.yml</code>). &nbsp;
 <b>Sales priority</b> = <i>contact this lead first</i>: it only becomes <b>high</b> after a manual
 check confirms weak/missing presence, so a promising-but-unchecked lead is Verify:&nbsp;high /
 Sales:&nbsp;medium &mdash; it may have strong Instagram, booking or brand presence the API can't see.
@@ -192,6 +266,7 @@ Rows with a yellow tint belong to a possible multi-location brand &mdash; branch
 under their best-scoring location but every branch is still listed. Verify every
 "Verify: high" row before outreach.
 </p>
+$area_filter
 <div class="tablewrap">
 <table>
   <thead>
@@ -209,6 +284,7 @@ $rows
   </tbody>
 </table>
 </div>
+$filter_script
 </body>
 </html>
 """)
@@ -220,14 +296,18 @@ MOBILE_PAGE = Template("""\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Local business leads (mobile)</title>
+<title>Local business leads (private, mobile)</title>
 <style>
   body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
          margin: 12px; color: #1c2733; background: #f6f8fa; }
   h1 { margin: 0 0 4px; font-size: 20px; }
   .meta { color: #57606a; margin: 0 0 8px; font-size: 12px; }
+  .private-banner { background: #ffe5e0; color: #a12318; font-weight: 600;
+                    padding: 8px 12px; border-radius: 8px; font-size: 12px;
+                    margin: 0 0 10px; }
   .legend { color: #57606a; font-size: 12px; margin: 0 0 14px; line-height: 1.6; }
   .legend b { color: #1c2733; }
+$filter_css
   .card { background: #fff; border-radius: 10px; padding: 12px;
           margin: 0 0 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
   .card.chain { background: #fbf6ea; border-left: 4px solid #b58a00; }
@@ -273,15 +353,122 @@ MOBILE_PAGE = Template("""\
 </head>
 <body>
 <h1>Local business leads</h1>
+<p class="private-banner">PRIVATE sales research — lives in the gitignored
+<code>private/</code> folder. Do not commit, publish or share it.</p>
 <p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; <b>$lead_count leads</b></p>
 <p class="legend">
 <b>This is a prioritization aid, not proof.</b> Tap a business name to open its
 Google Maps profile. Use the search buttons to verify a lead by hand, record what
-you find in <code>config/manual_checks.yml</code>, then re-run the score + export
+you find in <code>config/manual_checks.local.yml</code>, then re-run the score + export
 steps. <b>Do not contact "Verify: high" leads until their online presence has been
-manually checked.</b> The full column view lives in <code>leads.html</code>.
+manually checked.</b> The full column view lives in <code>private/leads.html</code>.
 </p>
+$area_filter
 $cards
+$filter_script
+</body>
+</html>
+""")
+
+
+PUBLIC_PAGE = Template("""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local business directory</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+         margin: 24px; color: #1c2733; background: #f6f8fa; }
+  h1 { margin: 0 0 4px; font-size: 22px; }
+  .meta { color: #57606a; margin: 0 0 10px; font-size: 13px; }
+  .legend { color: #57606a; font-size: 12px; margin: 0 0 18px; line-height: 1.7; }
+$filter_css
+  .tablewrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; background: #fff;
+          box-shadow: 0 1px 3px rgba(0,0,0,.08); font-size: 13px; }
+  th, td { padding: 7px 9px; border-bottom: 1px solid #e2e8f0;
+           text-align: left; vertical-align: top; }
+  th { background: #eef2f6; position: sticky; top: 0; white-space: nowrap; }
+  tr:hover td { background: #f0f6ff; }
+  .addr { color: #57606a; font-size: 12px; }
+  .closed { color: #a12318; font-size: 12px; font-weight: 600; }
+  .muted { color: #8c959f; }
+  .business-link { color: #0969da; font-weight: 700; text-decoration: none; }
+  .business-link:hover, .business-link:focus { text-decoration: underline; }
+</style>
+</head>
+<body>
+<h1>Local business directory</h1>
+<p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; <b>$lead_count businesses</b></p>
+<p class="legend">A snapshot of publicly listed business profiles in Santo
+Domingo / Santo Domingo Este, from the official Google Places API. Shown:
+name, category, neighborhood, address, and the phone, website and rating
+listed on each public Google profile. Data may be out of date &mdash; always
+confirm details directly with the business. Business names open the Google
+Maps profile.</p>
+$area_filter
+<div class="tablewrap">
+<table>
+  <thead>
+    <tr>
+      <th>Business</th><th>Category</th><th>Neighborhood</th>
+      <th>Phone</th><th>Website</th><th>Rating</th><th>Maps</th>
+    </tr>
+  </thead>
+  <tbody>
+$rows
+  </tbody>
+</table>
+</div>
+$filter_script
+</body>
+</html>
+""")
+
+
+PUBLIC_MOBILE_PAGE = Template("""\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Local business directory (mobile)</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+         margin: 12px; color: #1c2733; background: #f6f8fa; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  .meta { color: #57606a; margin: 0 0 8px; font-size: 12px; }
+  .legend { color: #57606a; font-size: 12px; margin: 0 0 14px; line-height: 1.6; }
+$filter_css
+  .card { background: #fff; border-radius: 10px; padding: 12px;
+          margin: 0 0 10px; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+  .cardname { font-size: 15px; font-weight: 700; }
+  .business-link { color: #0969da; font-weight: 700; text-decoration: none; }
+  .business-link:hover, .business-link:focus { text-decoration: underline; }
+  .addr { color: #57606a; font-size: 12px; margin-top: 2px; }
+  .row2 { font-size: 12px; color: #354150; margin-top: 6px; }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .btn { display: inline-block; padding: 7px 14px; border-radius: 8px;
+         background: #eef2f6; color: #1c2733; font-size: 13px; font-weight: 600;
+         text-decoration: none; }
+  .btn-maps { background: #0969da; color: #fff; }
+  .closed { color: #a12318; font-size: 12px; font-weight: 600; margin-top: 2px; }
+  .missing { color: #c0392b; font-weight: 600; }
+  .muted { color: #8c959f; }
+</style>
+</head>
+<body>
+<h1>Local business directory</h1>
+<p class="meta">Generated: $generated_at &nbsp;&middot;&nbsp; <b>$lead_count businesses</b></p>
+<p class="legend">Publicly listed business profiles in Santo Domingo /
+Santo Domingo Este (official Google Places API). Tap a business name for its
+Google Maps profile. Data may be out of date &mdash; confirm with the
+business.</p>
+$area_filter
+$cards
+$filter_script
 </body>
 </html>
 """)
@@ -294,6 +481,49 @@ def score_css_class(score):
     if score >= 40:
         return "score-mid"
     return "score-low"
+
+
+def area_labels(lead):
+    """All scan-area labels that ever found this lead."""
+    labels = lead.get("source_areas") or []
+    if not labels and lead.get("source_area"):
+        labels = [lead["source_area"]]
+    return [str(label) for label in labels]
+
+
+def area_display(lead, area_names):
+    """Human-readable neighborhood names for a lead's scan areas."""
+    return "; ".join(area_names.get(label, label) for label in area_labels(lead))
+
+
+def data_areas_attr(lead):
+    """data-areas attribute used by the neighborhood filter widget."""
+    labels = area_labels(lead)
+    if not labels:
+        return ""
+    return f' data-areas="{html.escape("|".join(labels), quote=True)}"'
+
+
+def build_area_filter(leads, area_names):
+    """The neighborhood <select> for the filter widget ('' = no areas known)."""
+    seen = []
+    for lead in leads:
+        for label in area_labels(lead):
+            if label not in seen:
+                seen.append(label)
+    if not seen:
+        return ""
+    options = ['<option value="">All neighborhoods</option>']
+    for label in sorted(seen, key=lambda item: area_names.get(item, item).lower()):
+        display = area_names.get(label, label)
+        options.append(
+            f'<option value="{html.escape(label, quote=True)}">{html.escape(display)}</option>'
+        )
+    return (
+        '<div class="filterbar"><label for="area-filter"><b>Neighborhood:</b></label> '
+        f'<select id="area-filter">{"".join(options)}</select> '
+        '<span class="count" id="area-filter-count"></span></div>'
+    )
 
 
 def business_name_html(lead):
@@ -413,8 +643,18 @@ def cluster_cell(lead):
     return f'<span class="cluster">{badge}<br>{key} <span class="muted">({cid})</span></span>'
 
 
-def build_html_row(lead):
-    """Render one lead as an HTML table row (all values escaped)."""
+def address_line(lead, area_names):
+    """Address plus the neighborhood name(s), for the addr line."""
+    esc = html.escape
+    address = esc(lead.get("address", ""))
+    areas = esc(area_display(lead, area_names))
+    if address and areas:
+        return f"{address} &nbsp;&middot;&nbsp; {areas}"
+    return address or areas
+
+
+def build_html_row(lead, area_names):
+    """Render one lead as a PRIVATE HTML table row (all values escaped)."""
     esc = html.escape
 
     maps_url = lead.get("google_maps_url", "")
@@ -453,10 +693,10 @@ def build_html_row(lead):
     row_class = ' class="chain"' if (lead.get("cluster_size", 1) > 1) else ""
 
     return (
-        f"    <tr{row_class}>\n"
+        f"    <tr{row_class}{data_areas_attr(lead)}>\n"
         f'      <td><span class="score {score_css_class(score)}">{score}</span></td>\n'
         f"      <td>{business_name_html(lead)}{closed_html}"
-        f'<div class="addr">{esc(lead.get("address", ""))}</div>{notes_html}</td>\n'
+        f'<div class="addr">{address_line(lead, area_names)}</div>{notes_html}</td>\n'
         f'      <td>{esc(lead.get("matched_category") or lead.get("source_category", ""))}</td>\n'
         f'      <td><span class="badge conf-{esc(confidence)}">{esc(confidence)}</span></td>\n'
         f"      <td>{cluster_cell(lead)}</td>\n"
@@ -476,8 +716,8 @@ def build_html_row(lead):
     )
 
 
-def build_mobile_card(lead):
-    """Render one lead as a phone-friendly card (all values escaped)."""
+def build_mobile_card(lead, area_names):
+    """Render one lead as a PRIVATE phone-friendly card (all values escaped)."""
     esc = html.escape
 
     score = lead.get("lead_score", 0)
@@ -546,13 +786,111 @@ def build_mobile_card(lead):
 
     card_class = "card chain" if lead.get("cluster_size", 1) > 1 else "card"
     return (
-        f'<div class="{card_class}">\n'
+        f'<div class="{card_class}"{data_areas_attr(lead)}>\n'
         f'  <div class="cardtop"><span class="score {score_css_class(score)}">'
         f'{score}</span><span class="cardname">{name_html}</span></div>\n'
         f"{closed_html}"
-        f'  <div class="addr">{esc(lead.get("address", ""))}</div>\n'
+        f'  <div class="addr">{address_line(lead, area_names)}</div>\n'
         f"{notes_html}"
         f'  <div class="badges">{"".join(badges)}</div>\n'
+        f'  <div class="row2">{row2}</div>\n'
+        f"{buttons_html}"
+        "</div>"
+    )
+
+
+def build_public_row(lead, area_names):
+    """Render one business as a PUBLIC directory table row.
+
+    Only fields from PUBLIC_FIELDS may be used here: no scores, priorities,
+    lead types, offers, notes, presence or cluster analysis.
+    """
+    esc = html.escape
+
+    maps_url = lead.get("google_maps_url", "")
+    if maps_url:
+        maps_cell = f'<a href="{esc(maps_url, quote=True)}" target="_blank">open</a>'
+    else:
+        maps_cell = '<span class="muted">&mdash;</span>'
+
+    website = lead.get("website") or ""
+    if website:
+        website_cell_html = f'<a href="{esc(website, quote=True)}" target="_blank">site</a>'
+    else:
+        website_cell_html = '<span class="muted">&mdash;</span>'
+
+    rating = lead.get("rating")
+    if rating is None:
+        rating_cell = '<span class="muted">&mdash;</span>'
+    else:
+        rating_cell = f"{rating:.1f} &#9733; ({lead.get('review_count') or 0})"
+
+    phone = esc(lead.get("phone", ""))
+    phone_cell = phone if phone else '<span class="muted">&mdash;</span>'
+
+    business_status = lead.get("business_status", "")
+    closed_html = ""
+    if business_status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
+        closed_html = (
+            f'<div class="closed">{esc(business_status.replace("_", " ").title())}</div>'
+        )
+
+    return (
+        f"    <tr{data_areas_attr(lead)}>\n"
+        f"      <td>{business_name_html(lead)}{closed_html}"
+        f'<div class="addr">{esc(lead.get("address", ""))}</div></td>\n'
+        f'      <td>{esc(lead.get("matched_category") or lead.get("source_category", ""))}</td>\n'
+        f"      <td>{esc(area_display(lead, area_names))}</td>\n"
+        f"      <td>{phone_cell}</td>\n"
+        f"      <td>{website_cell_html}</td>\n"
+        f"      <td>{rating_cell}</td>\n"
+        f"      <td>{maps_cell}</td>\n"
+        "    </tr>"
+    )
+
+
+def build_public_card(lead, area_names):
+    """Render one business as a PUBLIC directory card (same field rules)."""
+    esc = html.escape
+
+    business_status = lead.get("business_status", "")
+    closed_html = ""
+    if business_status in ("CLOSED_PERMANENTLY", "CLOSED_TEMPORARILY"):
+        closed_html = (
+            f'<div class="closed">{esc(business_status.replace("_", " ").title())}</div>'
+        )
+
+    rating = lead.get("rating")
+    rating_text = "" if rating is None else f"{rating:.1f} &#9733; ({lead.get('review_count') or 0})"
+    phone = esc(lead.get("phone", ""))
+    category = esc(lead.get("matched_category") or lead.get("source_category", ""))
+    areas = esc(area_display(lead, area_names))
+    row2_parts = [part for part in (category, areas, phone, rating_text) if part]
+    row2 = " &nbsp;&middot;&nbsp; ".join(row2_parts)
+
+    buttons = []
+    if lead.get("phone"):
+        tel = esc(str(lead["phone"]).replace(" ", ""), quote=True)
+        buttons.append(f'<a class="btn" href="tel:{tel}">Call</a>')
+    website = lead.get("website") or ""
+    if website:
+        buttons.append(
+            f'<a class="btn" href="{esc(website, quote=True)}" target="_blank" '
+            'rel="noopener noreferrer">Website</a>'
+        )
+    maps_url = lead.get("google_maps_url") or ""
+    if maps_url:
+        buttons.append(
+            f'<a class="btn btn-maps" href="{esc(maps_url, quote=True)}" '
+            'target="_blank" rel="noopener noreferrer">Maps</a>'
+        )
+    buttons_html = f'  <div class="btnrow">{"".join(buttons)}</div>\n' if buttons else ""
+
+    return (
+        f'<div class="card"{data_areas_attr(lead)}>\n'
+        f'  <div class="cardname">{business_name_html(lead)}</div>\n'
+        f"{closed_html}"
+        f'  <div class="addr">{esc(lead.get("address", ""))}</div>\n'
         f'  <div class="row2">{row2}</div>\n'
         f"{buttons_html}"
         "</div>"
@@ -617,7 +955,7 @@ def count_multi_location_groups(leads):
     return len(groups)
 
 
-def write_html(leads, path, generated_at):
+def write_html(leads, path, generated_at, area_names):
     display_leads = group_chains_for_display(leads)
     unique_brand_keys = len({lead.get("brand_key") for lead in leads})
     review_rows = sum(1 for lead in leads if lead.get("review_needed"))
@@ -633,7 +971,7 @@ def write_html(leads, path, generated_at):
         if verified_weak
         else ""
     )
-    rows = "\n".join(build_html_row(lead) for lead in display_leads)
+    rows = "\n".join(build_html_row(lead, area_names) for lead in display_leads)
     page = HTML_PAGE.substitute(
         generated_at=html.escape(generated_at),
         lead_count=len(leads),
@@ -643,32 +981,82 @@ def write_html(leads, path, generated_at):
         verified_weak_html=verified_weak_html,
         unique_brand_keys=unique_brand_keys,
         rows=rows,
+        filter_css=FILTER_CSS,
+        area_filter=build_area_filter(leads, area_names),
+        filter_script=FILTER_SCRIPT,
     )
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(page)
 
 
-def write_mobile_html(leads, path, generated_at):
+def write_mobile_html(leads, path, generated_at, area_names):
     display_leads = group_chains_for_display(leads)
-    cards = "\n".join(build_mobile_card(lead) for lead in display_leads)
+    cards = "\n".join(build_mobile_card(lead, area_names) for lead in display_leads)
     page = MOBILE_PAGE.substitute(
         generated_at=html.escape(generated_at),
         lead_count=len(leads),
         cards=cards,
+        filter_css=FILTER_CSS,
+        area_filter=build_area_filter(leads, area_names),
+        filter_script=FILTER_SCRIPT,
     )
     with open(path, "w", encoding="utf-8") as handle:
         handle.write(page)
 
 
+def public_sort_key(lead):
+    """Neutral ordering for the public directory: category, then name."""
+    category = (lead.get("matched_category") or lead.get("source_category") or "").lower()
+    return (category, (lead.get("name") or "").lower())
+
+
+def write_public_html(leads, path, generated_at, area_names):
+    ordered = sorted(leads, key=public_sort_key)
+    rows = "\n".join(build_public_row(lead, area_names) for lead in ordered)
+    page = PUBLIC_PAGE.substitute(
+        generated_at=html.escape(generated_at),
+        lead_count=len(ordered),
+        rows=rows,
+        filter_css=FILTER_CSS,
+        area_filter=build_area_filter(ordered, area_names),
+        filter_script=FILTER_SCRIPT,
+    )
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(page)
+
+
+def write_public_mobile_html(leads, path, generated_at, area_names):
+    ordered = sorted(leads, key=public_sort_key)
+    cards = "\n".join(build_public_card(lead, area_names) for lead in ordered)
+    page = PUBLIC_MOBILE_PAGE.substitute(
+        generated_at=html.escape(generated_at),
+        lead_count=len(ordered),
+        cards=cards,
+        filter_css=FILTER_CSS,
+        area_filter=build_area_filter(ordered, area_names),
+        filter_script=FILTER_SCRIPT,
+    )
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(page)
+
+
+def load_area_names():
+    """Map area label -> human-readable name (tolerates config problems)."""
+    try:
+        return {area["label"]: area.get("name", area["label"]) for area in load_scan_areas()}
+    except ConfigError:
+        return {}
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="Export scored leads to CSV, JSON and a static HTML report."
+        description="Export scored leads: public directory + private research reports."
     )
     parser.add_argument(
         "--min-score",
         type=int,
         default=None,
-        help="only export leads with at least this score (default: export all)",
+        help="only export PRIVATE leads with at least this score (default: export all)",
     )
     args = parser.parse_args()
 
@@ -676,10 +1064,11 @@ def main():
         data = load_json(SCORED_LEADS_FILE)
     except ConfigError as exc:
         die(f"{exc}\n  Run the pipeline first:\n"
-            "    py scripts/scan_places.py --all\n"
+            "    py scripts/scan_places.py --matrix\n"
             "    py scripts/score_leads.py")
 
-    leads = data.get("leads", [])
+    all_leads = data.get("leads", [])
+    leads = all_leads
     if args.min_score is not None:
         leads = [lead for lead in leads if lead.get("lead_score", 0) >= args.min_score]
     if not leads:
@@ -688,13 +1077,16 @@ def main():
     # Highest score first — that is the order you work the list in.
     leads.sort(key=lambda lead: lead.get("lead_score", 0), reverse=True)
 
+    area_names = load_area_names()
     generated_at = utc_now_iso()
     REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    PRIVATE_DIR.mkdir(parents=True, exist_ok=True)
 
-    csv_path = REPORTS_DIR / "leads.csv"
-    json_path = REPORTS_DIR / "leads.json"
-    html_path = REPORTS_DIR / "leads.html"
-    mobile_path = REPORTS_DIR / "leads_mobile.html"
+    # PRIVATE research reports (gitignored — never commit these).
+    csv_path = PRIVATE_DIR / "leads.csv"
+    json_path = PRIVATE_DIR / "leads.json"
+    private_html_path = PRIVATE_DIR / "leads.html"
+    private_mobile_path = PRIVATE_DIR / "leads_mobile.html"
 
     write_csv(leads, csv_path)
     save_json(
@@ -702,27 +1094,40 @@ def main():
         {
             "generated_at": generated_at,
             "note": (
-                "Short-term lead PRIORITIZATION snapshot from the official Google "
-                "Places API — not proof of anything. A missing websiteUri only "
-                "means the Google profile returned no website; the business may "
-                "still have Instagram/booking/directory presence or an unlinked "
-                "site. manual_verification_priority = check this lead first; "
+                "PRIVATE short-term lead PRIORITIZATION snapshot from the official "
+                "Google Places API — not proof of anything, and never to be "
+                "published. A missing websiteUri only means the Google profile "
+                "returned no website; the business may still have Instagram/"
+                "booking/directory presence or an unlinked site. "
+                "manual_verification_priority = check this lead first; "
                 "sales_priority = contact this lead first (never high until a "
-                "manual check in config/manual_checks.yml confirms weak/missing "
-                "presence). Re-scan before outreach."
+                "manual check in config/manual_checks.local.yml confirms "
+                "weak/missing presence). Re-scan before outreach."
             ),
             "lead_count": len(leads),
             "leads": leads,
         },
     )
-    write_html(leads, html_path, generated_at)
-    write_mobile_html(leads, mobile_path, generated_at)
+    write_html(leads, private_html_path, generated_at, area_names)
+    write_mobile_html(leads, private_mobile_path, generated_at, area_names)
+
+    # PUBLIC directory pages (committed; served by GitHub Pages). Always
+    # built from ALL leads — --min-score is a research filter, and ranking
+    # information must not shape the public pages.
+    public_html_path = REPORTS_DIR / "leads.html"
+    public_mobile_path = REPORTS_DIR / "leads_mobile.html"
+    write_public_html(all_leads, public_html_path, generated_at, area_names)
+    write_public_mobile_html(all_leads, public_mobile_path, generated_at, area_names)
 
     print(f"Exported {len(leads)} leads (generated {generated_at}):")
-    print(f"  {csv_path}")
-    print(f"  {json_path}")
-    print(f"  {html_path}   <- open this one in your browser")
-    print(f"  {mobile_path}   <- phone-friendly card version")
+    print("  PRIVATE (gitignored — do not commit or share):")
+    print(f"    {csv_path}")
+    print(f"    {json_path}")
+    print(f"    {private_html_path}   <- your research view, open in a browser")
+    print(f"    {private_mobile_path}   <- phone-friendly research cards")
+    print("  PUBLIC directory (safe to commit; served by GitHub Pages):")
+    print(f"    {public_html_path}")
+    print(f"    {public_mobile_path}")
 
 
 if __name__ == "__main__":

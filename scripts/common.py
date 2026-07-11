@@ -21,15 +21,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 REPORTS_DIR = PROJECT_ROOT / "reports"
+# Private sales research lives here. The directory is gitignored — nothing
+# in it may ever be committed or copied into the public reports/ pages.
+PRIVATE_DIR = PROJECT_ROOT / "private"
 
 SCAN_AREAS_FILE = CONFIG_DIR / "scan_areas.yml"
 CATEGORIES_FILE = CONFIG_DIR / "categories.yml"
+SCAN_MATRIX_FILE = CONFIG_DIR / "scan_matrix.yml"
 MANUAL_CHECKS_FILE = CONFIG_DIR / "manual_checks.yml"
+# Gitignored twin of manual_checks.yml: same format, but entries here may
+# carry evidence notes and sales remarks that must never be committed.
+MANUAL_CHECKS_LOCAL_FILE = CONFIG_DIR / "manual_checks.local.yml"
 
 # Working files produced by the pipeline. This is short-term research data,
 # not a permanent database — refresh it before every outreach round.
 SCAN_RESULTS_FILE = DATA_DIR / "scan_results.json"
 SCORED_LEADS_FILE = DATA_DIR / "leads_scored.json"
+# Local log of Places API usage, one entry per scan run (gitignored with the
+# rest of data/). Lets you check how many requests were made this month.
+REQUEST_LOG_FILE = DATA_DIR / "request_log.json"
 
 # Google Places API limit: search radius must be 0 < radius <= 50000 meters.
 MAX_RADIUS_METERS = 50000
@@ -89,6 +99,11 @@ def load_scan_areas():
         if label in labels:
             raise ConfigError(f"scan_areas.yml: duplicate area label '{label}'.")
         labels.add(label)
+
+        # Optional human-readable neighborhood name; defaults to the label.
+        name = area.setdefault("name", label)
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError(f"{where} ('{label}'): 'name' must be a non-empty text value.")
 
         for key, low, high in (("latitude", -90, 90), ("longitude", -180, 180)):
             value = area[key]
@@ -173,6 +188,50 @@ def load_categories():
     return categories
 
 
+def load_scan_matrix(areas, categories):
+    """Read config/scan_matrix.yml -> list of (area, category) dict pairs.
+
+    Every area/category label in the matrix must exist in the main configs,
+    and no (area x category) pair may appear twice.
+    """
+    data = load_yaml(SCAN_MATRIX_FILE)
+    entries = data.get("matrix")
+    if not isinstance(entries, list) or not entries:
+        raise ConfigError("scan_matrix.yml must contain a non-empty 'matrix' list.")
+
+    areas_by_label = {area["label"]: area for area in areas}
+    categories_by_label = {cat["label"]: cat for cat in categories}
+
+    pairs, seen = [], set()
+    for index, entry in enumerate(entries):
+        where = f"scan_matrix.yml, entry #{index + 1}"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{where}: each entry must be a mapping (area, categories).")
+        area_label = entry.get("area")
+        if area_label not in areas_by_label:
+            raise ConfigError(
+                f"{where}: unknown area '{area_label}'. "
+                "Labels must exist in scan_areas.yml."
+            )
+        category_labels = entry.get("categories")
+        if not isinstance(category_labels, list) or not category_labels:
+            raise ConfigError(f"{where} ('{area_label}'): 'categories' must be a non-empty list.")
+        for category_label in category_labels:
+            if category_label not in categories_by_label:
+                raise ConfigError(
+                    f"{where} ('{area_label}'): unknown category '{category_label}'. "
+                    "Labels must exist in categories.yml."
+                )
+            pair_key = (area_label, category_label)
+            if pair_key in seen:
+                raise ConfigError(
+                    f"{where}: duplicate pair '{area_label}' x '{category_label}'."
+                )
+            seen.add(pair_key)
+            pairs.append((areas_by_label[area_label], categories_by_label[category_label]))
+    return pairs
+
+
 # Values you may record in config/manual_checks.yml after checking a business
 # online by hand. These are the ONLY sources of "verified" presence knowledge —
 # the tool never scrapes or probes anything itself.
@@ -185,22 +244,18 @@ ONLINE_PRESENCE_MANUAL_VALUES = (
 )
 
 
-def load_manual_checks():
-    """Read config/manual_checks.yml -> {place_id: {online_presence, note}}.
-
-    The file is optional; an empty or missing file simply means nothing has
-    been manually verified yet.
-    """
-    if not MANUAL_CHECKS_FILE.exists():
+def _load_manual_checks_file(path):
+    """Read one manual-checks file -> {place_id: {online_presence, note}}."""
+    if not path.exists():
         return {}
-    data = load_yaml(MANUAL_CHECKS_FILE)
+    data = load_yaml(path)
     checks = data.get("checks") or []
     if not isinstance(checks, list):
-        raise ConfigError("manual_checks.yml: 'checks' must be a list.")
+        raise ConfigError(f"{path.name}: 'checks' must be a list.")
 
     result = {}
     for index, entry in enumerate(checks):
-        where = f"manual_checks.yml, check #{index + 1}"
+        where = f"{path.name}, check #{index + 1}"
         if not isinstance(entry, dict):
             raise ConfigError(f"{where}: each check must be a mapping (place_id, online_presence).")
         place_id = entry.get("place_id")
@@ -219,6 +274,30 @@ def load_manual_checks():
             raise ConfigError(f"{where}: 'note' must be text.")
         result[place_id.strip()] = {"online_presence": presence, "note": note.strip()}
     return result
+
+
+def load_manual_checks():
+    """Read the manual verification results from BOTH manual-checks files.
+
+    config/manual_checks.yml is COMMITTED: it may only hold neutral status
+    values (place_id + online_presence, no notes). config/manual_checks.local.yml
+    is GITIGNORED: same format, but entries there may carry evidence notes and
+    sales remarks. Local entries override committed ones for the same place id.
+    Both files are optional; empty/missing files mean nothing verified yet.
+    """
+    committed = _load_manual_checks_file(MANUAL_CHECKS_FILE)
+    noted = [pid for pid, check in committed.items() if check.get("note")]
+    if noted:
+        print(
+            "WARNING: config/manual_checks.yml is committed to the public repo but "
+            f"contains notes on {len(noted)} check(s). Move evidence/sales notes to "
+            "config/manual_checks.local.yml (gitignored) and keep only place_id + "
+            "online_presence in the committed file.",
+            file=sys.stderr,
+        )
+    combined = dict(committed)
+    combined.update(_load_manual_checks_file(MANUAL_CHECKS_LOCAL_FILE))
+    return combined
 
 
 def load_json(path, default=_MISSING):

@@ -1,15 +1,19 @@
 @echo off
-rem One-click runner: scans all areas/categories, scores the leads,
-rem exports the reports, then opens the HTML report in your browser.
+rem One-click runner: runs the targeted SDE scan matrix (capped at 40 API
+rem requests as a safety net), scores the leads, exports the reports, then
+rem opens the PRIVATE research report in your browser.
+rem Preview first without spending API requests:
+rem     py scripts\scan_places.py --matrix --dry-run
 cd /d "%~dp0"
 
-py scripts\scan_places.py --all || goto :error
+py scripts\scan_places.py --matrix --max-requests 40 || goto :error
 py scripts\score_leads.py || goto :error
 py scripts\export_report.py || goto :error
 
-start "" "reports\leads.html"
+start "" "private\leads.html"
 echo.
-echo Done! The report just opened in your browser.
+echo Done! The private research report just opened in your browser.
+echo (The public directory pages were refreshed in reports\.)
 pause
 exit /b 0
 
